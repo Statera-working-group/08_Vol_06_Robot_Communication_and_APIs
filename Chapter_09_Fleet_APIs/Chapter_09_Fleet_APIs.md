@@ -1,0 +1,1558 @@
+**Volume 06 Robot Communication and APIs**
+
+
+# 09. Fleet APIs
+
+##  
+
+## 09.01 Fleet API Design Principles: Multi-Robot Orchestration
+
+![](images/image1.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+A fleet API transforms a collection of individually autonomous robots into a coordinated operational system. While a robot API exposes the capabilities, state, and commands of one machine, a fleet API represents shared resources, missions, traffic constraints, priorities, and operational policies across many robots. Its primary design objective is therefore orchestration rather than direct low-level control.
+
+Multi-robot orchestration requires a clear separation between fleet-level intent and robot-level execution. The fleet management layer should specify what must be accomplished, such as transporting material between locations or performing an inspection route, while each robot retains responsibility for local navigation, obstacle avoidance, motion control, and immediate safety behavior. This separation reduces coupling between central services and heterogeneous robot implementations.
+
+A useful fleet API is based on stable abstractions such as robot, mission, task, location, route, resource, traffic zone, charging station, and operational state. These abstractions create a common vocabulary between fleet management servers, warehouse systems, manufacturing systems, hospital applications, and robots. Hardware-specific concepts should remain behind adapters whenever possible so that applications are not tightly coupled to individual robot vendors or platforms.
+
+Robot identity is the foundation of fleet orchestration. Every robot should have a persistent identifier associated with its type, capabilities, software configuration, current availability, and authorization scope. A fleet service can then discover which robots are eligible for a task without assuming that all machines are equivalent. Capability-based selection becomes especially important when AMRs, towing robots, manipulators, inspection robots, and other specialized platforms share one environment.
+
+Mission APIs should express operational objectives rather than sequences of actuator commands. A mission may contain pickup, delivery, inspection, waiting, charging, docking, or interaction tasks connected by dependencies and execution constraints. The fleet orchestrator converts this mission into robot assignments and execution plans. This architecture allows scheduling algorithms to evolve independently from robot firmware and navigation software.
+
+Task allocation should be treated as a dynamic decision rather than a permanent binding between a mission and a robot. Candidate selection may consider location, battery state, payload capacity, equipment, estimated travel time, current workload, maintenance condition, and mission priority. Because conditions change continuously, the API model should support reassignment, cancellation, suspension, retry, and recovery without corrupting the mission state.
+
+Fleet APIs must explicitly represent lifecycle states. A task can progress through states such as created, queued, assigned, accepted, executing, completed, failed, canceled, or suspended. Robots likewise move through operational states including available, busy, charging, offline, degraded, or faulted. Explicit state transitions prevent external applications from interpreting ambiguous combinations of telemetry fields and make distributed behavior easier to audit.
+
+Asynchronous operation is fundamental because physical missions may continue for seconds, minutes, or hours after an API request is accepted. A request to create a mission should therefore not imply immediate physical completion. The server can acknowledge the request, return a persistent mission identifier, and expose subsequent progress through status queries or event streams. This model separates command acceptance from execution outcome and avoids long-lived synchronous transactions.
+
+Idempotency is particularly important when commands cross unreliable wireless networks. If an application retries a mission request after losing a response, the fleet system must distinguish a legitimate retry from a new mission. Idempotency keys, immutable command identifiers, sequence information, and persistent execution records can prevent duplicated transportation or repeated physical actions. Safe retry semantics should therefore be defined as part of the API contract.
+
+Concurrency control becomes more difficult as fleet size increases because robots compete for shared physical resources. Corridors, intersections, elevators, doors, loading stations, chargers, work cells, and docking areas cannot always be used simultaneously. The fleet API should expose these resources as managed entities or constraints, allowing orchestration services to reserve, release, queue, and monitor access instead of embedding resource ownership assumptions inside individual robots.
+
+Traffic orchestration should remain logically distinct from local collision avoidance. Fleet-level traffic management can coordinate routes, zone reservations, intersection access, and congestion reduction using knowledge of multiple robots. Local navigation must still react to unexpected people, objects, or hazards using onboard sensing. Maintaining both layers ensures that loss of fleet connectivity does not remove the robot\'s immediate ability to stop or behave safely.
+
+A fleet API should also distinguish commands from events. Commands represent requested changes, such as assigning a mission or requesting charging, whereas events describe facts that have already occurred, such as a robot entering a zone, completing a task, or reporting a fault. Combining request-response APIs with event-driven communication allows enterprise applications to issue operations while dashboards and analytics systems consume fleet activity asynchronously.
+
+Consistency requirements should reflect physical reality rather than forcing every data element into a strongly synchronized model. Mission ownership, resource reservations, and safety-critical coordination may require strict consistency, while telemetry, historical position data, utilization statistics, and dashboard information can tolerate bounded delay. Separating transactional fleet state from high-frequency observations improves scalability while preserving correctness where coordination depends on authoritative state.
+
+The API should be designed for partial failure because fleet systems operate across robots, wireless networks, edge servers, brokers, databases, and enterprise services. A robot may become unreachable while continuing its current behavior, or a fleet server may restart while missions remain active. Heartbeats, leases, command timeouts, durable mission records, reconciliation procedures, and deterministic recovery rules allow the system to reconstruct operational state after communication or service failures.
+
+Offline behavior must be defined before deployment rather than treated as an exceptional implementation detail. Each robot needs rules describing which operations may continue without fleet connectivity and which require renewed authorization. The fleet service similarly needs policies for temporarily unreachable robots so that it does not immediately reassign a task that may still be physically executing. Reconnection should trigger state reconciliation before normal orchestration resumes.
+
+Heterogeneous fleets require capability-oriented APIs and adapter boundaries. Vendor-specific protocols can be translated into a normalized fleet model while preserving specialized features through controlled extensions. This approach allows a common orchestration service to manage robots with different navigation stacks, payload interfaces, charging mechanisms, and communication technologies. It also prepares the architecture for interoperability mechanisms addressed later in the fleet API structure.
+
+Scalability depends more on communication patterns than on simply increasing server capacity. Continuously polling every robot for every attribute produces unnecessary traffic as fleet size grows. Event subscriptions, filtered telemetry, aggregation, batching, hierarchical gateways, and appropriate update frequencies reduce communication overhead. High-rate data should be transmitted only when operationally necessary, while slower fleet state can use lightweight periodic synchronization.
+
+Observability should be incorporated into the API contract so that orchestration decisions can be reconstructed after an incident. Mission identifiers, robot identifiers, timestamps, command identifiers, correlation IDs, state transitions, reservation changes, and error information should propagate across services. These records support troubleshooting, performance analysis, safety investigation, and optimization without requiring engineers to infer behavior from unrelated logs distributed across multiple machines.
+
+Security boundaries must follow operational authority. Authentication establishes the identity of robots and applications, while authorization determines which missions, robots, locations, or command classes each identity may access. Sensitive fleet operations should be protected against replay, tampering, and unauthorized execution. Security should therefore be designed around physical consequences rather than treating a robot fleet as an ordinary collection of web services.
+
+Safety authority must remain clearly defined even when orchestration becomes increasingly intelligent. A fleet optimizer may choose assignments and routes, but it should not override onboard protective functions, emergency stops, certified motion limits, or local hazard responses. APIs should communicate safety-related states and restrictions while preserving the independence of mechanisms that must remain effective when cloud, fleet, or enterprise services become unavailable.
+
+The resulting architecture forms a layered control hierarchy: enterprise systems express business demand, fleet services convert demand into coordinated missions, robot APIs translate assignments into platform operations, and onboard controllers execute motion under local safety constraints. This hierarchy connects the Fleet API chapter with the broader software architecture, communication, navigation, and multi-robot intelligence structure of the robotics software framework.
+
+플릿 API(Fleet API)는 개별적으로 자율 동작하는 로봇들의 집합을 하나의 조정된 운영 시스템(Coordinated Operational System)으로 전환한다. 로봇 API(Robot API)가 단일 로봇의 기능, 상태, 명령을 외부에 제공한다면, 플릿 API는 여러 로봇에 걸쳐 공유되는 자원, 미션(Mission), 교통 제약, 우선순위 및 운영 정책을 표현한다. 따라서 플릿 API 설계의 핵심 목표는 직접적인 저수준 제어(Low-Level Control)가 아니라 오케스트레이션(Orchestration)에 있다.
+
+다중 로봇 오케스트레이션(Multi-Robot Orchestration)을 위해서는 플릿 수준 의도(Fleet-Level Intent)와 로봇 수준 실행(Robot-Level Execution)을 명확하게 분리해야 한다. 플릿 관리 계층(Fleet Management Layer)은 위치 간 자재 운송이나 점검 경로 수행과 같이 무엇을 달성해야 하는지를 지정하고, 각 로봇은 로컬 내비게이션(Local Navigation), 장애물 회피(Obstacle Avoidance), 모션 제어(Motion Control), 즉각적인 안전 동작을 담당한다. 이러한 분리는 중앙 서비스와 이기종 로봇 구현 사이의 결합도를 낮춘다.
+
+효과적인 플릿 API는 로봇(Robot), 미션(Mission), 태스크(Task), 위치(Location), 경로(Route), 자원(Resource), 교통 구역(Traffic Zone), 충전 스테이션(Charging Station), 운영 상태(Operational State)와 같은 안정적인 추상화(Abstraction)를 기반으로 한다. 이러한 추상화는 플릿 관리 서버, 창고 시스템, 제조 시스템, 병원 애플리케이션 및 로봇 사이에 공통 어휘를 형성한다. 애플리케이션이 특정 로봇 제조사나 플랫폼에 강하게 종속되지 않도록 하드웨어별 개념은 가능한 한 어댑터(Adapter) 뒤에 배치해야 한다.
+
+로봇 식별성(Robot Identity)은 플릿 오케스트레이션의 기반이다. 모든 로봇은 로봇 유형, 기능(Capability), 소프트웨어 구성, 현재 가용성 및 권한 범위와 연결된 영구 식별자(Persistent Identifier)를 가져야 한다. 이를 통해 플릿 서비스는 모든 로봇이 동일하다고 가정하지 않고 특정 태스크를 수행할 수 있는 로봇을 탐색할 수 있다. 특히 AMR, 견인 로봇(Towing Robot), 매니퓰레이터(Manipulator), 점검 로봇(Inspection Robot) 등 특수 플랫폼이 동일한 환경을 공유할 때 기능 기반 선택(Capability-Based Selection)이 중요해진다.
+
+미션 API(Mission API)는 액추에이터 명령(Actuator Command)의 순서가 아니라 운영 목적(Operational Objective)을 표현해야 한다. 하나의 미션은 픽업(Pickup), 배송(Delivery), 점검(Inspection), 대기(Waiting), 충전(Charging), 도킹(Docking), 상호작용(Interaction) 등의 태스크를 포함할 수 있으며, 이들은 의존성과 실행 제약으로 연결된다. 플릿 오케스트레이터(Fleet Orchestrator)는 이러한 미션을 로봇 할당과 실행 계획으로 변환한다. 이 구조를 사용하면 스케줄링 알고리즘을 로봇 펌웨어 및 내비게이션 소프트웨어와 독립적으로 발전시킬 수 있다.
+
+태스크 할당(Task Allocation)은 미션과 로봇을 영구적으로 연결하는 방식이 아니라 동적인 의사결정(Dynamic Decision)으로 다루어야 한다. 후보 로봇 선택에는 위치, 배터리 상태, 적재 용량, 장비, 예상 이동 시간, 현재 작업 부하, 유지보수 상태 및 미션 우선순위 등을 고려할 수 있다. 운영 조건은 지속적으로 변하므로 API 모델은 미션 상태를 손상시키지 않으면서 재할당(Reassignment), 취소(Cancellation), 일시 중단(Suspension), 재시도(Retry), 복구(Recovery)를 지원해야 한다.
+
+플릿 API는 수명주기 상태(Lifecycle State)를 명시적으로 표현해야 한다. 태스크는 생성(Created), 대기(Queued), 할당(Assigned), 수락(Accepted), 실행(Executing), 완료(Completed), 실패(Failed), 취소(Canceled), 일시 중단(Suspended) 등의 상태를 거칠 수 있다. 로봇 역시 사용 가능(Available), 작업 중(Busy), 충전 중(Charging), 오프라인(Offline), 성능 저하(Degraded), 고장(Faulted) 등의 운영 상태를 가진다. 명확한 상태 전이는 외부 애플리케이션이 여러 텔레메트리 필드의 조합을 임의로 해석하는 것을 방지하고 분산 시스템의 동작을 쉽게 추적할 수 있게 한다.
+
+물리적인 미션은 API 요청이 수락된 이후에도 수초에서 수시간 동안 계속될 수 있기 때문에 비동기 운영(Asynchronous Operation)이 필수적이다. 따라서 미션 생성 요청이 즉각적인 물리적 완료를 의미해서는 안 된다. 서버는 요청을 수락하고 영구적인 미션 식별자(Persistent Mission Identifier)를 반환한 뒤, 상태 조회 또는 이벤트 스트림(Event Stream)을 통해 진행 상황을 제공할 수 있다. 이 모델은 명령 수락(Command Acceptance)과 실행 결과(Execution Outcome)를 분리하여 장시간 유지되는 동기식 트랜잭션을 방지한다.
+
+멱등성(Idempotency)은 신뢰성이 일정하지 않은 무선 네트워크를 통해 명령이 전달될 때 특히 중요하다. 애플리케이션이 응답을 받지 못해 미션 요청을 다시 전송하는 경우 플릿 시스템은 정상적인 재시도와 새로운 미션을 구별해야 한다. 멱등성 키(Idempotency Key), 불변 명령 식별자(Immutable Command Identifier), 시퀀스 정보 및 영구 실행 기록을 활용하면 중복 운송이나 반복적인 물리 동작을 방지할 수 있다. 따라서 안전한 재시도 의미 체계(Safe Retry Semantics)는 API 계약의 일부로 정의되어야 한다.
+
+플릿 규모가 증가하면 여러 로봇이 공유 물리 자원(Shared Physical Resource)을 두고 경쟁하기 때문에 동시성 제어(Concurrency Control)가 더욱 어려워진다. 복도, 교차로, 엘리베이터, 출입문, 적재 스테이션, 충전기, 작업 셀(Work Cell), 도킹 구역은 항상 동시에 사용할 수 있는 자원이 아니다. 플릿 API는 이러한 요소를 관리 대상 자원 또는 제약 조건으로 표현하여 오케스트레이션 서비스가 접근 권한을 예약(Reserve), 해제(Release), 대기열 관리(Queue), 모니터링할 수 있도록 해야 한다.
+
+교통 오케스트레이션(Traffic Orchestration)은 로컬 충돌 회피(Local Collision Avoidance)와 논리적으로 분리되어야 한다. 플릿 수준의 교통 관리는 여러 로봇의 정보를 활용하여 경로, 구역 예약, 교차로 접근 및 혼잡 완화를 조정할 수 있다. 그러나 로컬 내비게이션은 탑재 센서를 이용하여 예상하지 못한 사람, 물체 또는 위험 요소에 계속 대응해야 한다. 두 계층을 동시에 유지하면 플릿 통신이 끊어지더라도 로봇이 즉시 정지하거나 안전하게 동작할 수 있는 능력을 유지할 수 있다.
+
+플릿 API는 명령(Command)과 이벤트(Event)도 구분해야 한다. 명령은 미션 할당이나 충전 요청과 같이 상태 변경을 요구하는 요청을 나타내며, 이벤트는 로봇의 특정 구역 진입, 태스크 완료 또는 고장 보고와 같이 이미 발생한 사실을 나타낸다. 요청-응답 API(Request-Response API)와 이벤트 기반 통신(Event-Driven Communication)을 결합하면 기업 애플리케이션은 운영 명령을 전달하면서 대시보드와 분석 시스템은 플릿 활동을 비동기적으로 수신할 수 있다.
+
+일관성 요구사항(Consistency Requirement)은 모든 데이터를 강제로 강한 동기화 모델에 적용하기보다 물리적 운영 현실을 반영해야 한다. 미션 소유권, 자원 예약 및 안전 관련 조정에는 강한 일관성(Strong Consistency)이 필요할 수 있지만, 텔레메트리, 과거 위치 데이터, 가동률 통계 및 대시보드 정보는 일정 수준의 지연을 허용할 수 있다. 트랜잭션 플릿 상태(Transactional Fleet State)와 고주파 관측 데이터(High-Frequency Observation)를 분리하면 조정에 필요한 정확성을 유지하면서 확장성을 향상시킬 수 있다.
+
+플릿 API는 로봇, 무선 네트워크, 엣지 서버(Edge Server), 브로커(Broker), 데이터베이스 및 기업 서비스에 걸쳐 동작하므로 부분 장애(Partial Failure)를 기본 조건으로 설계해야 한다. 로봇이 현재 동작을 계속 수행하면서 통신 불능 상태가 될 수도 있고, 미션이 진행되는 동안 플릿 서버가 재시작될 수도 있다. 하트비트(Heartbeat), 리스(Lease), 명령 타임아웃(Command Timeout), 영속적인 미션 기록, 상태 조정(Reconciliation) 절차 및 결정론적 복구 규칙을 적용하면 통신이나 서비스 장애 이후 운영 상태를 재구성할 수 있다.
+
+오프라인 동작(Offline Behavior)은 배포 이후의 예외 상황이 아니라 설계 단계에서 정의되어야 한다. 각 로봇은 플릿 연결 없이 계속 수행할 수 있는 작업과 새로운 승인이 필요한 작업을 구분하는 규칙을 가져야 한다. 플릿 서비스 역시 일시적으로 연결되지 않는 로봇에 대한 정책을 가져야 하며, 실제로 실행 중일 가능성이 있는 태스크를 즉시 다른 로봇에 재할당해서는 안 된다. 연결이 복구되면 정상적인 오케스트레이션을 재개하기 전에 상태 조정(State Reconciliation)을 수행해야 한다.
+
+이기종 플릿(Heterogeneous Fleet)은 기능 중심 API(Capability-Oriented API)와 어댑터 경계(Adapter Boundary)를 필요로 한다. 제조사별 프로토콜은 표준화된 플릿 모델(Normalized Fleet Model)로 변환하면서 특수 기능은 통제된 확장 기능(Controlled Extension)을 통해 유지할 수 있다. 이를 통해 하나의 공통 오케스트레이션 서비스가 서로 다른 내비게이션 스택, 페이로드 인터페이스, 충전 방식 및 통신 기술을 가진 로봇을 관리할 수 있으며, 이후 플릿 API 구조에서 다루는 상호운용성(Interoperability) 메커니즘에도 대응할 수 있다.
+
+확장성(Scalability)은 단순히 서버의 처리 용량을 증가시키는 것보다 통신 패턴(Communication Pattern)에 더 크게 좌우된다. 모든 로봇의 모든 속성을 지속적으로 폴링(Polling)하면 플릿 규모가 커질수록 불필요한 통신량이 증가한다. 이벤트 구독(Event Subscription), 필터링된 텔레메트리, 데이터 집계(Aggregation), 배치 처리(Batching), 계층형 게이트웨이(Hierarchical Gateway), 적절한 업데이트 주기를 활용하면 통신 부하를 줄일 수 있다. 고주파 데이터는 운영상 필요한 경우에만 전송하고 상대적으로 느리게 변화하는 플릿 상태는 경량 주기 동기화를 사용할 수 있다.
+
+관측 가능성(Observability)은 사고 발생 이후 오케스트레이션 의사결정을 재구성할 수 있도록 API 계약에 포함되어야 한다. 미션 식별자, 로봇 식별자, 타임스탬프, 명령 식별자, 상관관계 ID(Correlation ID), 상태 전이, 예약 변경 및 오류 정보가 서비스 전반에 전달되어야 한다. 이러한 기록은 여러 시스템에 분산된 로그를 엔지니어가 수작업으로 추론하지 않고도 문제 해결, 성능 분석, 안전 사고 조사 및 운영 최적화를 수행할 수 있게 한다.
+
+보안 경계(Security Boundary)는 운영 권한(Operational Authority)을 따라 설계되어야 한다. 인증(Authentication)은 로봇과 애플리케이션의 신원을 확인하며, 인가(Authorization)는 각 신원이 접근할 수 있는 미션, 로봇, 위치 또는 명령 유형을 결정한다. 중요한 플릿 운영은 재전송 공격(Replay), 변조(Tampering), 비인가 실행(Unauthorized Execution)으로부터 보호되어야 한다. 따라서 보안은 로봇 플릿을 일반적인 웹 서비스 집합으로 취급하기보다 실제 물리적 결과(Physical Consequence)를 기준으로 설계해야 한다.
+
+오케스트레이션이 점점 지능화되더라도 안전 권한(Safety Authority)은 명확하게 정의되어야 한다. 플릿 최적화기(Fleet Optimizer)는 로봇 할당과 경로를 결정할 수 있지만, 로봇에 탑재된 보호 기능, 비상 정지(Emergency Stop), 인증된 모션 제한(Certified Motion Limit), 로컬 위험 대응 기능을 무시하거나 재정의해서는 안 된다. API는 안전 관련 상태와 제약을 전달하면서도 클라우드, 플릿 또는 기업 서비스가 사용할 수 없는 상황에서도 작동해야 하는 안전 메커니즘의 독립성을 유지해야 한다.
+
+최종적으로 이러한 구조는 계층형 제어 구조(Layered Control Hierarchy)를 형성한다. 기업 시스템(Enterprise System)은 비즈니스 요구를 표현하고, 플릿 서비스(Fleet Service)는 이를 조정된 미션으로 변환하며, 로봇 API는 할당된 미션을 플랫폼 수준의 동작으로 변환한다. 마지막으로 온보드 제어기(Onboard Controller)는 로컬 안전 제약 아래 실제 움직임을 실행한다. 이 계층 구조는 플릿 API를 전체 로봇 소프트웨어 체계의 소프트웨어 아키텍처, 통신, 내비게이션 및 다중 로봇 지능(Multi-Robot Intelligence)과 연결한다.
+
+##  
+
+## 09.02 VDA 5050 Standard Deep Dive: Channels / Messages [w/Code]
+
+![](images/image2.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+VDA 5050 is an interoperability specification designed to standardize communication between automated guided vehicles, autonomous mobile robots, and higher-level fleet control systems. Instead of requiring a master control system to implement a different proprietary interface for every vehicle manufacturer, VDA 5050 defines common message structures and communication conventions. This creates a standardized integration boundary between heterogeneous mobile robots and fleet orchestration systems.
+
+The architecture separates the vehicle-specific control domain from the master control domain. A master control system creates transport orders, coordinates traffic, and supervises fleet operations, while each vehicle retains responsibility for executing supported actions and controlling its local motion. VDA 5050 therefore does not replace navigation, localization, obstacle avoidance, or safety controllers. It provides an interoperable communication layer through which operational intent and execution state can be exchanged.
+
+Communication is organized around MQTT using a publish-and-subscribe model. Instead of establishing dedicated point-to-point connections between every system component, participants publish messages to predefined topics and subscribe to topics containing information they require. This approach provides asynchronous communication and reduces direct coupling between the master control system and vehicles, which is particularly useful when many mobile robots operate simultaneously within one industrial environment.
+
+A VDA 5050 topic hierarchy identifies the communication context and the vehicle associated with a message. Topic structures include elements representing the interface namespace, protocol version, manufacturer, serial number, and message category. This organization allows an MQTT broker to route messages belonging to different vehicles independently while enabling a master control system to supervise many vehicles through a consistent communication pattern.
+
+The order channel is one of the most important communication paths because it transfers movement and action instructions from the master control system to a vehicle. An order represents a structured mission rather than a stream of low-level velocity commands. It describes where the vehicle should travel, which path segments should be followed, and which actions should be performed at specific points. The vehicle interprets this information through its own navigation and control software.
+
+An order is fundamentally represented as a graph consisting of nodes and edges. Nodes identify significant locations or operational points, while edges describe connections between nodes through which the vehicle can travel. Actions can be associated with nodes or edges depending on when they must be executed. This graph-oriented representation enables the master control system to describe both transportation intent and operational sequencing without directly controlling the vehicle\'s actuators.
+
+Sequence identifiers are important because nodes and edges must form an unambiguous ordered structure. The vehicle uses these identifiers to determine how individual graph elements relate to the current order and execution progress. The master control system can consequently maintain a consistent representation of the intended route while receiving information about which parts have already been processed. This supports synchronization between planning and physical execution.
+
+VDA 5050 distinguishes between released and unreleased portions of an order. Released graph elements are authorized for execution, whereas unreleased elements describe future planning information that is not yet executable. This mechanism enables a master control system to communicate a broader route while controlling how far the vehicle may proceed. It is particularly valuable for traffic coordination where several vehicles compete for intersections, corridors, or other shared resources.
+
+The state channel provides the primary feedback path from a vehicle to the master control system. State messages communicate the vehicle\'s current execution condition and contain information associated with the active order, processed nodes and edges, operating mode, position-related information, battery condition, errors, action states, and other operational data. The master control system uses these updates to maintain a synchronized representation of the physical fleet.
+
+Order and state messages therefore form a closed orchestration loop. The master control system publishes an order, the vehicle validates and executes the executable portion, and state messages report the resulting progress. Based on this feedback, the master control system may release additional route segments, coordinate other vehicles, or respond to exceptional conditions. The protocol consequently supports supervisory coordination while leaving real-time motion execution inside the vehicle.
+
+The instantActions communication mechanism addresses commands that are not naturally represented as part of the normal node-and-edge order graph. Such actions can request operational behavior that must be considered independently of the current route progression. The vehicle reports the execution state of these actions through its state information, allowing the master control system to determine whether an action is waiting, executing, completed, or has encountered an error.
+
+The visualization channel provides information intended primarily for visualization and monitoring purposes rather than authoritative mission execution. A vehicle can publish frequently changing information such as its current position and related visualization data. Separating visualization traffic from the main operational state helps systems handle different update frequencies and purposes. Monitoring applications can therefore display robot movement without requiring every graphical update to become part of mission-state processing.
+
+The connection channel communicates information about the communication status of a vehicle. This becomes important because MQTT-based distributed systems must distinguish normal disconnection, unexpected communication loss, and active connectivity. Connection-related information helps supervisory systems understand whether a vehicle is currently reachable and supports operational responses when connectivity changes. Reliable connection awareness is essential when physical missions continue while network conditions fluctuate.
+
+A factsheet channel can communicate relatively static information describing the vehicle and its supported capabilities. Unlike continuously changing state data, factsheet information characterizes properties that a master control system can use to understand the vehicle\'s interface and operational capabilities. This becomes particularly important in heterogeneous fleets because different vehicle types may support different actions, physical characteristics, localization functions, or operational features.
+
+Header information provides context required to interpret individual VDA 5050 messages consistently. Messages use fields that support identification, sequencing, timestamps, protocol version handling, and vehicle association. Such metadata becomes critical in distributed environments because messages may be delayed, repeated, or observed at different times by multiple components. Explicit identification and sequencing allow communicating systems to determine how incoming information relates to previous exchanges.
+
+Order identifiers and update identifiers support synchronization between the master control system and the vehicle. A master control system may need to modify or extend an existing order as execution progresses, rather than continuously creating unrelated missions. The vehicle must therefore distinguish a new order from an update to an existing one. Correct identifier handling prevents stale or duplicated messages from unintentionally replacing the currently valid execution context.
+
+Actions provide an extensible mechanism for representing operational behavior beyond movement. Depending on vehicle capabilities, actions can describe activities such as loading, unloading, docking, waiting, interacting with equipment, or other application-specific operations. Action parameters provide additional execution information, while action states allow progress to be reported. Interoperability therefore depends not only on message syntax but also on shared understanding of action semantics.
+
+Error reporting is another essential component of the state model. A vehicle must be able to communicate conditions that prevent or degrade execution, together with sufficient contextual information for the master control system to interpret the problem. The supervisory system can then decide whether to wait, replan, cancel an order, dispatch another vehicle, or request operator intervention. Standardized error communication reduces dependence on proprietary diagnostic conventions.
+
+Message validation is critical because syntactically valid JSON does not automatically imply operationally valid robot behavior. Implementations should validate required fields, identifiers, graph relationships, supported actions, sequence consistency, and protocol versions before accepting commands. The receiving vehicle must also reject instructions that conflict with its capabilities or execution rules. Interface compliance therefore requires semantic validation in addition to serialization correctness.
+
+The MQTT broker becomes an important infrastructure component in this architecture because it transports orders, states, connection information, visualization data, instant actions, and other protocol messages. Broker availability, authentication, authorization, topic permissions, retained-message behavior, quality-of-service configuration, and reconnect handling directly affect fleet communication reliability. Production deployments should therefore treat MQTT configuration as part of the fleet control architecture rather than as a simple transport detail.
+
+VDA 5050 interoperability does not mean that every robot becomes functionally identical. Vehicles may differ substantially in kinematics, payload capacity, navigation technology, supported actions, charging methods, and safety behavior. The standard creates a common communication contract through which those differences can be exposed and managed. A fleet controller must still perform capability-aware orchestration and assign orders only to vehicles capable of executing them correctly.
+
+The overall communication model can therefore be understood as a structured exchange between orchestration intent and physical execution. Orders and instant actions flow primarily toward vehicles, while state, connection, visualization, and capability-related information flow primarily toward supervisory systems. MQTT topics provide the transport structure, standardized messages provide semantic structure, and vehicle-specific adapters connect those messages to local navigation and control implementations.
+
+Within a broader Fleet API architecture, VDA 5050 acts as an interoperability boundary rather than the complete fleet management system. Enterprise APIs can create business missions, fleet services can allocate robots and coordinate traffic, and a VDA 5050 interface can translate those decisions into standardized vehicle communication. This layered approach allows WMS, MES, or other enterprise systems to remain separated from individual robot implementations while supporting heterogeneous multi-vendor fleets.
+
+VDA 5050은 자동 유도 운반차(Automated Guided Vehicle), 자율 이동 로봇(Autonomous Mobile Robot), 상위 수준 플릿 제어 시스템(Fleet Control System) 사이의 통신을 표준화하기 위해 설계된 상호운용성 규격(Interoperability Specification)이다. 마스터 제어 시스템(Master Control System)이 로봇 제조사마다 서로 다른 독자 인터페이스를 구현하는 대신, VDA 5050은 공통 메시지 구조와 통신 규칙을 정의한다. 이를 통해 이기종 이동 로봇과 플릿 오케스트레이션 시스템 사이에 표준화된 통합 경계(Integration Boundary)를 형성한다.
+
+이 아키텍처는 차량별 제어 영역(Vehicle-Specific Control Domain)과 마스터 제어 영역(Master Control Domain)을 분리한다. 마스터 제어 시스템은 운송 오더(Transport Order)를 생성하고 교통을 조정하며 플릿 운영을 감독하는 반면, 각 차량은 지원되는 액션(Action)을 실행하고 로컬 모션(Local Motion)을 제어할 책임을 유지한다. 따라서 VDA 5050은 내비게이션(Navigation), 위치추정(Localization), 장애물 회피(Obstacle Avoidance), 안전 제어기(Safety Controller)를 대체하지 않는다. 대신 운영 의도와 실행 상태를 교환할 수 있는 상호운용 가능한 통신 계층을 제공한다.
+
+통신은 발행-구독 모델(Publish-and-Subscribe Model)을 사용하는 MQTT를 중심으로 구성된다. 모든 시스템 구성요소 사이에 전용 점대점 연결(Point-to-Point Connection)을 구축하는 대신, 참여자는 미리 정의된 토픽(Topic)에 메시지를 발행하고 필요한 정보가 포함된 토픽을 구독한다. 이러한 방식은 비동기 통신(Asynchronous Communication)을 지원하고 마스터 제어 시스템과 차량 사이의 직접적인 결합도를 낮추므로, 많은 이동 로봇이 하나의 산업 환경에서 동시에 운영되는 경우 특히 유용하다.
+
+VDA 5050의 토픽 계층 구조(Topic Hierarchy)는 통신 컨텍스트와 메시지가 속한 차량을 식별한다. 토픽 구조에는 인터페이스 네임스페이스(Interface Namespace), 프로토콜 버전(Protocol Version), 제조사(Manufacturer), 일련번호(Serial Number), 메시지 범주(Message Category)를 나타내는 요소가 포함된다. 이러한 구조를 통해 MQTT 브로커(MQTT Broker)는 서로 다른 차량의 메시지를 독립적으로 라우팅하면서 마스터 제어 시스템이 일관된 통신 패턴으로 다수의 차량을 감독할 수 있게 한다.
+
+오더 채널(Order Channel)은 마스터 제어 시스템에서 차량으로 이동 및 액션 명령을 전달하기 때문에 가장 중요한 통신 경로 중 하나이다. 오더(Order)는 저수준 속도 명령의 연속이 아니라 구조화된 미션(Structured Mission)을 나타낸다. 오더에는 차량이 이동해야 할 위치, 따라야 할 경로 구간, 특정 지점에서 수행해야 하는 액션이 기술된다. 차량은 자체 내비게이션 및 제어 소프트웨어를 통해 이러한 정보를 해석한다.
+
+오더는 기본적으로 노드(Node)와 엣지(Edge)로 구성된 그래프(Graph) 형태로 표현된다. 노드는 중요한 위치 또는 운영 지점을 식별하고, 엣지는 차량이 이동할 수 있는 노드 사이의 연결을 나타낸다. 액션은 실행 시점에 따라 노드 또는 엣지와 연결될 수 있다. 이러한 그래프 중심 표현(Graph-Oriented Representation)을 사용하면 마스터 제어 시스템이 차량의 액추에이터를 직접 제어하지 않으면서 운송 의도와 운영 순서를 함께 표현할 수 있다.
+
+시퀀스 식별자(Sequence Identifier)는 노드와 엣지가 명확한 순서 구조를 형성해야 하기 때문에 중요하다. 차량은 이러한 식별자를 이용해 각각의 그래프 요소가 현재 오더 및 실행 진행 상태와 어떤 관계를 갖는지 판단한다. 이에 따라 마스터 제어 시스템은 의도된 경로에 대한 일관된 표현을 유지하면서 이미 처리된 부분에 관한 정보를 수신할 수 있다. 이는 계획(Planning)과 물리적 실행(Physical Execution) 사이의 동기화를 지원한다.
+
+VDA 5050은 오더를 해제된 부분(Released Portion)과 해제되지 않은 부분(Unreleased Portion)으로 구분한다. 해제된 그래프 요소는 실행이 허가된 부분이며, 해제되지 않은 요소는 아직 실행할 수 없는 미래의 계획 정보를 나타낸다. 이 메커니즘을 사용하면 마스터 제어 시스템이 더 넓은 범위의 경로를 전달하면서 차량이 실제로 진행할 수 있는 범위를 제어할 수 있다. 여러 차량이 교차로, 복도 또는 기타 공유 자원을 두고 경쟁하는 교통 조정(Traffic Coordination)에서 특히 유용하다.
+
+상태 채널(State Channel)은 차량에서 마스터 제어 시스템으로 전달되는 핵심 피드백 경로를 제공한다. 상태 메시지(State Message)는 차량의 현재 실행 상태를 전달하며, 활성 오더, 처리된 노드와 엣지, 운영 모드(Operating Mode), 위치 관련 정보, 배터리 상태, 오류(Error), 액션 상태(Action State) 및 기타 운영 데이터와 관련된 정보를 포함한다. 마스터 제어 시스템은 이러한 업데이트를 사용하여 실제 플릿의 상태와 동기화된 표현을 유지한다.
+
+따라서 오더 메시지와 상태 메시지는 폐쇄형 오케스트레이션 루프(Closed Orchestration Loop)를 형성한다. 마스터 제어 시스템이 오더를 발행하면 차량은 실행 가능한 부분을 검증하고 수행하며, 상태 메시지를 통해 실행 진행 상황을 보고한다. 이러한 피드백을 기반으로 마스터 제어 시스템은 추가 경로 구간을 해제하거나 다른 차량을 조정하고 예외 상황에 대응할 수 있다. 결과적으로 프로토콜은 실시간 모션 실행을 차량 내부에 유지하면서 상위 수준의 감독 및 조정을 지원한다.
+
+즉시 액션(instantActions) 통신 메커니즘은 일반적인 노드-엣지 오더 그래프(Node-Edge Order Graph)의 일부로 자연스럽게 표현하기 어려운 명령을 처리한다. 이러한 액션은 현재 경로 진행 상태와 독립적으로 고려해야 하는 운영 동작을 요청할 수 있다. 차량은 상태 정보를 통해 해당 액션의 실행 상태를 보고하며, 이를 통해 마스터 제어 시스템은 액션이 대기 중인지, 실행 중인지, 완료되었는지 또는 오류가 발생했는지를 판단할 수 있다.
+
+시각화 채널(Visualization Channel)은 권위 있는 미션 실행(Authoritative Mission Execution)보다는 주로 시각화 및 모니터링을 위한 정보를 제공한다. 차량은 현재 위치와 관련 시각화 데이터처럼 빠르게 변화하는 정보를 발행할 수 있다. 시각화 트래픽을 핵심 운영 상태와 분리하면 시스템이 서로 다른 업데이트 주기와 목적을 효율적으로 처리할 수 있다. 따라서 모니터링 애플리케이션은 모든 그래픽 업데이트를 미션 상태 처리의 일부로 포함하지 않고도 로봇 이동을 표시할 수 있다.
+
+연결 채널(Connection Channel)은 차량의 통신 상태에 관한 정보를 전달한다. MQTT 기반 분산 시스템에서는 정상적인 연결 해제, 예상하지 못한 통신 손실, 활성 연결 상태를 구별해야 하기 때문에 이러한 정보가 중요하다. 연결 관련 정보는 감독 시스템이 차량에 현재 접근할 수 있는지를 파악하고 연결 상태가 변경될 때 운영적으로 대응할 수 있도록 지원한다. 네트워크 상태가 변하는 동안에도 물리적 미션이 계속될 수 있으므로 신뢰성 있는 연결 상태 인식(Connection Awareness)이 중요하다.
+
+팩트시트 채널(Factsheet Channel)은 차량과 지원 기능을 설명하는 상대적으로 정적인 정보를 전달할 수 있다. 지속적으로 변화하는 상태 데이터와 달리 팩트시트 정보는 마스터 제어 시스템이 차량의 인터페이스와 운영 기능을 이해하는 데 활용할 수 있는 특성을 설명한다. 서로 다른 차량 유형이 각기 다른 액션, 물리적 특성, 위치추정 기능 또는 운영 기능을 지원할 수 있기 때문에 이기종 플릿에서 특히 중요하다.
+
+헤더 정보(Header Information)는 각각의 VDA 5050 메시지를 일관되게 해석하는 데 필요한 컨텍스트를 제공한다. 메시지는 식별, 순서 지정, 타임스탬프(Timestamp), 프로토콜 버전 처리 및 차량 연결을 지원하는 필드를 사용한다. 분산 환경에서는 메시지가 지연되거나 반복될 수 있고 여러 구성요소가 서로 다른 시점에 메시지를 관찰할 수 있으므로 이러한 메타데이터가 중요하다. 명시적인 식별 및 순서 정보를 통해 통신 시스템은 수신된 정보와 이전 메시지 사이의 관계를 판단할 수 있다.
+
+오더 식별자(Order Identifier)와 업데이트 식별자(Update Identifier)는 마스터 제어 시스템과 차량 사이의 동기화를 지원한다. 마스터 제어 시스템은 실행이 진행됨에 따라 완전히 새로운 미션을 계속 생성하는 대신 기존 오더를 수정하거나 확장해야 할 수 있다. 따라서 차량은 새로운 오더와 기존 오더의 업데이트를 구별할 수 있어야 한다. 올바른 식별자 처리는 오래되거나 중복된 메시지가 현재 유효한 실행 컨텍스트를 의도하지 않게 대체하는 것을 방지한다.
+
+액션(Action)은 이동 이외의 운영 동작을 표현하기 위한 확장 가능한 메커니즘을 제공한다. 차량의 기능에 따라 액션은 적재(Loading), 하역(Unloading), 도킹(Docking), 대기(Waiting), 장비와의 상호작용 또는 기타 애플리케이션별 작업을 표현할 수 있다. 액션 매개변수(Action Parameter)는 추가적인 실행 정보를 제공하며, 액션 상태(Action State)는 진행 상황을 보고할 수 있게 한다. 따라서 상호운용성은 메시지 구문뿐 아니라 액션 의미 체계(Action Semantics)에 대한 공통된 이해에도 의존한다.
+
+오류 보고(Error Reporting) 역시 상태 모델의 핵심 구성요소이다. 차량은 실행을 방해하거나 성능을 저하시키는 상태를 마스터 제어 시스템이 문제를 해석할 수 있을 정도의 충분한 컨텍스트 정보와 함께 전달할 수 있어야 한다. 감독 시스템은 이를 바탕으로 대기, 재계획(Replanning), 오더 취소, 다른 차량 배치 또는 운영자 개입 요청 여부를 결정할 수 있다. 표준화된 오류 통신은 독자적인 진단 규칙에 대한 의존성을 줄인다.
+
+메시지 검증(Message Validation)은 구문적으로 올바른 JSON이 반드시 운영적으로 유효한 로봇 동작을 의미하지 않기 때문에 중요하다. 구현 시스템은 명령을 수락하기 전에 필수 필드, 식별자, 그래프 관계, 지원 액션, 시퀀스 일관성 및 프로토콜 버전을 검증해야 한다. 수신 차량 역시 자체 기능이나 실행 규칙과 충돌하는 명령을 거부해야 한다. 따라서 인터페이스 적합성(Interface Compliance)을 확보하려면 직렬화 정확성뿐 아니라 의미론적 검증(Semantic Validation)도 필요하다.
+
+MQTT 브로커는 오더, 상태, 연결 정보, 시각화 데이터, 즉시 액션 및 기타 프로토콜 메시지를 전송하기 때문에 이 아키텍처의 중요한 인프라 구성요소가 된다. 브로커 가용성(Broker Availability), 인증(Authentication), 인가(Authorization), 토픽 권한(Topic Permission), 보존 메시지 동작(Retained-Message Behavior), 서비스 품질(Quality of Service) 설정 및 재연결 처리는 플릿 통신 신뢰성에 직접적인 영향을 미친다. 따라서 실제 운영 환경에서는 MQTT 설정을 단순한 전송 세부사항이 아니라 플릿 제어 아키텍처의 일부로 다루어야 한다.
+
+VDA 5050의 상호운용성은 모든 로봇이 기능적으로 동일해진다는 것을 의미하지 않는다. 차량은 운동학(Kinematics), 적재 용량, 내비게이션 기술, 지원 액션, 충전 방식 및 안전 동작에서 상당한 차이를 가질 수 있다. 표준은 이러한 차이를 외부에 표현하고 관리할 수 있는 공통 통신 계약(Common Communication Contract)을 제공한다. 따라서 플릿 제어기는 여전히 기능 인식 오케스트레이션(Capability-Aware Orchestration)을 수행하고 해당 오더를 올바르게 실행할 수 있는 차량에만 작업을 할당해야 한다.
+
+전체 통신 모델은 오케스트레이션 의도(Orchestration Intent)와 물리적 실행(Physical Execution) 사이의 구조화된 정보 교환으로 이해할 수 있다. 오더와 즉시 액션은 주로 차량 방향으로 전달되고, 상태, 연결, 시각화 및 기능 관련 정보는 주로 감독 시스템 방향으로 전달된다. MQTT 토픽은 전송 구조를 제공하고 표준화된 메시지는 의미 구조(Semantic Structure)를 제공하며, 차량별 어댑터(Vehicle-Specific Adapter)는 이러한 메시지를 로컬 내비게이션 및 제어 구현과 연결한다.
+
+더 넓은 플릿 API(Fleet API) 아키텍처에서 VDA 5050은 완전한 플릿 관리 시스템 자체라기보다 상호운용성 경계(Interoperability Boundary)로 기능한다. 기업 API(Enterprise API)는 비즈니스 미션을 생성하고, 플릿 서비스는 로봇을 할당하고 교통을 조정하며, VDA 5050 인터페이스는 이러한 결정을 표준화된 차량 통신으로 변환할 수 있다. 이러한 계층형 접근 방식은 창고 관리 시스템(WMS), 제조 실행 시스템(MES) 등의 기업 시스템을 개별 로봇 구현으로부터 분리하면서 이기종 다중 제조사 플릿(Heterogeneous Multi-Vendor Fleet)을 지원할 수 있게 한다.
+
+##  
+
+## 09.03 MassRobotics AMR Interoperability Standard [w/Code]
+
+![](images/image3.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+The MassRobotics AMR Interoperability Standard addresses a fundamental problem in modern mobile-robot deployments: robots from different manufacturers often operate as isolated systems even when they share the same facility. Each vendor may provide its own fleet manager, data model, terminology, and integration interface. The standard establishes a common approach for sharing essential operational information so heterogeneous autonomous mobile robots can coexist within a unified facility-level ecosystem.
+
+The standard focuses primarily on interoperability through shared information rather than replacing each manufacturer\'s proprietary robot control system. Individual vendors can continue using their own navigation algorithms, fleet management logic, safety mechanisms, and robot-specific functions. A standardized interface exposes selected information outside those systems, allowing facility software and other authorized systems to obtain a consistent view of robots from multiple vendors.
+
+This distinction creates an important architectural boundary. Robot vendors remain responsible for controlling their own vehicles, while interoperability services concentrate on exchanging operational data across vendor boundaries. The standard therefore does not attempt to define low-level motor commands, trajectory generation, localization algorithms, or safety control. Its purpose is to provide common semantics for information required to understand and coordinate heterogeneous AMRs operating in shared environments.
+
+A typical architecture contains several robot fleets connected to a facility-level interoperability layer. Each vendor fleet may include its own robots and fleet management server, while adapters translate vendor-specific information into the standardized representation. Applications above this layer can consume common robot information without implementing separate integrations for every manufacturer. This adapter-oriented model provides a practical migration path for facilities that already contain proprietary robot systems.
+
+Robot identity is essential because every participating mobile robot must be distinguishable across the shared environment. A standardized representation can associate each robot with identifiers and descriptive information that allow external systems to recognize its source and operational context. Stable identity also supports logging, monitoring, analytics, troubleshooting, and correlation of robot information when multiple fleets publish updates simultaneously.
+
+Location information is one of the most valuable interoperability data elements. A shared system needs to understand where participating robots are located so that facility applications can visualize fleet activity and support higher-level coordination. Position information must be interpreted within a known reference context because coordinates are useful only when communicating systems understand the associated map or coordinate system. Consistent location semantics are therefore as important as the numeric position itself.
+
+Velocity and motion-related information complement robot position by describing how a vehicle is moving. A facility-level system can use this information to build a more complete operational picture instead of relying only on periodic position samples. When robots from different vendors report comparable movement information, monitoring applications can observe traffic behavior, identify congestion patterns, and analyze interactions between independent fleets without accessing each vendor\'s internal motion controller.
+
+Operational status provides another important common abstraction. External systems need to know whether a robot is active, idle, unavailable, paused, charging, experiencing a problem, or otherwise unable to perform normal operations. Vendor implementations may internally use much more detailed state machines, but interoperability requires a common representation that allows facility applications to interpret essential robot conditions consistently across multiple manufacturers.
+
+Battery information provides useful context for fleet visibility and operational planning. A robot\'s energy condition can influence whether it is expected to continue working, seek charging infrastructure, or become temporarily unavailable. Standardized reporting allows facility-level monitoring systems to observe energy conditions across heterogeneous fleets without understanding every vendor\'s proprietary battery-management interface. Vendor-specific charging logic can remain under the control of the corresponding fleet manager.
+
+The standard can also expose information describing the physical characteristics of robots. Dimensions and related properties matter because heterogeneous vehicles may occupy different amounts of space and interact differently with corridors, intersections, doors, elevators, and staging areas. A small AMR and a large towing platform cannot automatically be treated as equivalent simply because both are mobile robots. Physical information gives higher-level systems context for interpreting their presence within a shared facility.
+
+The interoperability model is especially valuable for facility visualization. Instead of maintaining a separate monitoring dashboard for every vendor, an operator can potentially observe multiple robot fleets through a common application. Robot identity, position, movement, status, and other standardized information can be combined into a facility-wide operational view. This improves situational awareness while allowing the underlying robot fleets to remain independently managed.
+
+Data exchange should be designed as asynchronous communication because robot state changes continuously and multiple consumers may require the same information. A publish-and-subscribe architecture is well suited to this environment. Robots or fleet adapters can publish standardized updates while authorized applications subscribe to the information they require. This reduces direct dependencies between individual producers and consumers and supports scalable distribution of operational data.
+
+A common message envelope is important for interpreting information reliably. Messages should provide sufficient context to identify the source robot, understand the message type, determine when the information was generated, and interpret the associated payload. Timestamp information is particularly significant in robotics because a position or state observation becomes progressively less useful as it ages. Consumers must therefore distinguish current operational information from delayed or stale data.
+
+Coordinate-system management becomes a major practical issue when integrating independent fleets. Two vendors may represent the same physical building using different map origins, orientations, units, floor definitions, or internal localization maps. Interoperability cannot be achieved merely by transmitting numeric x and y values. Facility integration must establish a meaningful relationship between robot coordinates and a shared spatial reference so information from different fleets can be interpreted together.
+
+The standard\'s information-sharing orientation also influences traffic management. Knowing where robots are located does not automatically provide authority to command every robot or resolve every path conflict. Facility-level software may use shared information to detect potential interactions, define operational policies, or communicate with vendor fleet managers through additional interfaces. Actual motion execution and immediate collision avoidance remain responsibilities of the appropriate robot and fleet control systems.
+
+This makes the MassRobotics approach different from an interface primarily centered on sending executable route orders to vehicles. Its core value lies in creating shared awareness across heterogeneous fleets. A deployment can therefore use interoperability data as a common informational foundation while separate APIs or fleet-control mechanisms handle mission assignment, traffic reservation, charging requests, and other active orchestration functions where required.
+
+Security is essential because shared fleet information can reveal operationally sensitive details about a facility. Robot identities, positions, activity states, and movement patterns should be available only to authorized systems. Authentication, authorization, encrypted communication, credential management, and appropriate access boundaries should therefore accompany interoperability deployment. Standardizing data structures does not eliminate the responsibility to secure the infrastructure transporting and consuming those data.
+
+Reliability must also account for temporary communication failures. A robot or vendor adapter may disconnect while the physical vehicle continues operating. Consumers should not assume that the last received state remains indefinitely valid. Timestamps, connectivity monitoring, update expectations, and stale-data handling policies allow facility systems to represent uncertainty explicitly rather than presenting outdated robot information as if it were current.
+
+Extensibility is necessary because mobile robots perform increasingly diverse functions. Warehouse AMRs, hospital delivery robots, towing vehicles, inspection platforms, cleaning robots, and mobile manipulators may require additional information beyond a common baseline. A practical interoperability architecture should preserve a stable shared model while allowing specialized information to be added without forcing every consumer to understand every vendor-specific capability.
+
+Adapters are therefore a central engineering pattern for real deployments. A vendor adapter can read information from a proprietary fleet API, transform identifiers and state representations, convert coordinate information where necessary, and publish the standardized model. This prevents enterprise and facility applications from becoming tightly coupled to vendor interfaces. When a robot platform changes, the integration impact can be concentrated within the corresponding adapter instead of propagating throughout the software ecosystem.
+
+The resulting architecture supports gradual adoption. A facility does not need to replace existing robot fleets to introduce interoperability. Existing systems can remain operational while adapters expose standardized information to a common integration layer. New robot vendors can subsequently join the environment by implementing the same interoperability contract. This approach reduces integration complexity and helps organizations evolve from isolated vendor-specific fleets toward heterogeneous multi-robot operations.
+
+Within the broader Fleet API architecture, the MassRobotics AMR Interoperability Standard can serve as a common information layer between vendor fleets and facility-level applications. Enterprise systems, dashboards, analytics platforms, digital twins, and orchestration services can consume standardized robot information while vendor fleet managers retain responsibility for platform-specific control. The result is a layered architecture that separates shared fleet visibility from proprietary execution.
+
+For large-scale multi-robot environments, this separation is strategically important. Interoperability should not require every manufacturer to expose identical internal architectures or surrender control of its navigation stack. Instead, systems agree on a useful external representation of robot identity, location, motion, status, and related operational information. This common language provides the foundation for multi-vendor visibility, integration, and progressively more sophisticated fleet coordination.
+
+MassRobotics AMR 상호운용성 표준(MassRobotics AMR Interoperability Standard)은 현대 이동 로봇 배포 환경에서 발생하는 근본적인 문제를 해결하기 위한 표준이다. 서로 다른 제조사의 로봇은 동일한 시설을 공유하더라도 서로 분리된 시스템으로 운영되는 경우가 많다. 각 제조사는 자체 플릿 관리자(Fleet Manager), 데이터 모델(Data Model), 용어 체계 및 통합 인터페이스를 제공할 수 있다. 이 표준은 필수적인 운영 정보를 공유하기 위한 공통 접근 방식을 확립하여 이기종 자율 이동 로봇(Autonomous Mobile Robot)이 통합된 시설 수준 생태계 내에서 공존할 수 있도록 한다.
+
+이 표준은 각 제조사의 독자적인 로봇 제어 시스템을 대체하기보다 공유 정보(Shared Information)를 통한 상호운용성(Interoperability)에 중점을 둔다. 개별 제조사는 자체 내비게이션 알고리즘(Navigation Algorithm), 플릿 관리 로직(Fleet Management Logic), 안전 메커니즘(Safety Mechanism), 로봇별 특화 기능을 계속 사용할 수 있다. 표준화된 인터페이스는 이러한 시스템 외부로 선택된 정보를 제공하여 시설 소프트웨어와 기타 승인된 시스템이 여러 제조사의 로봇을 일관된 방식으로 파악할 수 있게 한다.
+
+이러한 구분은 중요한 아키텍처 경계(Architectural Boundary)를 형성한다. 로봇 제조사는 자체 차량 제어에 대한 책임을 유지하고, 상호운용성 서비스(Interoperability Service)는 제조사 경계를 넘어 운영 데이터를 교환하는 데 집중한다. 따라서 이 표준은 저수준 모터 명령, 궤적 생성(Trajectory Generation), 위치추정(Localization) 알고리즘 또는 안전 제어(Safety Control)를 정의하려 하지 않는다. 목적은 공유 환경에서 동작하는 이기종 AMR을 이해하고 조정하는 데 필요한 정보에 공통 의미 체계(Common Semantics)를 제공하는 것이다.
+
+일반적인 아키텍처는 시설 수준 상호운용성 계층(Facility-Level Interoperability Layer)에 연결된 여러 로봇 플릿으로 구성된다. 각 제조사 플릿은 자체 로봇과 플릿 관리 서버(Fleet Management Server)를 포함할 수 있으며, 어댑터(Adapter)는 제조사별 정보를 표준화된 표현으로 변환한다. 상위 애플리케이션은 제조사마다 별도의 통합 기능을 구현하지 않고도 공통 로봇 정보를 사용할 수 있다. 이러한 어댑터 중심 모델(Adapter-Oriented Model)은 이미 독자적인 로봇 시스템을 운영하는 시설에도 실용적인 전환 경로를 제공한다.
+
+로봇 식별성(Robot Identity)은 공유 환경에 참여하는 모든 이동 로봇을 서로 구별할 수 있어야 하기 때문에 필수적이다. 표준화된 표현은 각각의 로봇을 식별자와 설명 정보에 연결하여 외부 시스템이 로봇의 출처와 운영 컨텍스트를 인식할 수 있게 한다. 안정적인 식별 정보는 여러 플릿이 동시에 업데이트 정보를 발행하는 상황에서 로깅(Logging), 모니터링(Monitoring), 분석(Analytics), 문제 해결(Troubleshooting), 로봇 정보의 상관관계 분석에도 활용된다.
+
+위치 정보(Location Information)는 가장 중요한 상호운용성 데이터 요소 중 하나이다. 공유 시스템은 시설 애플리케이션이 플릿 활동을 시각화하고 상위 수준의 조정을 지원할 수 있도록 참여 로봇이 어디에 있는지 파악해야 한다. 좌표는 통신 시스템이 관련 지도 또는 좌표계(Coordinate System)를 이해하는 경우에만 의미가 있으므로 위치 정보는 알려진 기준 컨텍스트(Reference Context) 안에서 해석되어야 한다. 따라서 일관된 위치 의미 체계(Location Semantics)는 수치적인 위치 값 자체만큼 중요하다.
+
+속도 및 이동 관련 정보(Velocity and Motion Information)는 차량이 어떻게 움직이고 있는지를 설명하여 로봇 위치 정보를 보완한다. 시설 수준 시스템은 주기적인 위치 샘플에만 의존하는 대신 이러한 정보를 이용해 더욱 완전한 운영 상황을 구성할 수 있다. 서로 다른 제조사의 로봇이 비교 가능한 이동 정보를 제공하면 모니터링 애플리케이션은 각 제조사의 내부 모션 제어기(Motion Controller)에 접근하지 않고도 교통 흐름, 혼잡 패턴 및 독립적인 플릿 사이의 상호작용을 분석할 수 있다.
+
+운영 상태(Operational Status)는 또 다른 중요한 공통 추상화(Common Abstraction)를 제공한다. 외부 시스템은 로봇이 활성 상태인지, 유휴 상태인지, 사용 불가능한 상태인지, 일시 정지되었는지, 충전 중인지, 문제가 발생했는지 또는 정상적인 운영을 수행할 수 없는 상태인지를 파악해야 한다. 제조사 시스템 내부에서는 훨씬 상세한 상태 머신(State Machine)을 사용할 수 있지만, 상호운용성을 위해서는 시설 애플리케이션이 여러 제조사의 핵심 로봇 상태를 일관되게 해석할 수 있는 공통 표현이 필요하다.
+
+배터리 정보(Battery Information)는 플릿 가시성(Fleet Visibility)과 운영 계획에 유용한 컨텍스트를 제공한다. 로봇의 에너지 상태는 계속 작업할 수 있는지, 충전 인프라로 이동해야 하는지 또는 일시적으로 사용 불가능해질 것인지에 영향을 미칠 수 있다. 표준화된 보고 방식을 사용하면 시설 수준 모니터링 시스템이 제조사별 독자적인 배터리 관리 인터페이스를 이해하지 않고도 이기종 플릿 전체의 에너지 상태를 관찰할 수 있다. 제조사별 충전 로직은 해당 플릿 관리자의 제어 아래에 그대로 유지될 수 있다.
+
+표준은 로봇의 물리적 특성(Physical Characteristics)을 설명하는 정보도 제공할 수 있다. 이기종 차량은 서로 다른 공간을 점유하고 복도, 교차로, 출입문, 엘리베이터 및 대기 구역과 서로 다른 방식으로 상호작용하기 때문에 크기와 관련 속성이 중요하다. 소형 AMR과 대형 견인 플랫폼(Towing Platform)은 모두 이동 로봇이라는 이유만으로 동일하게 취급할 수 없다. 물리적 정보는 상위 수준 시스템이 공유 시설에서 각 로봇의 존재와 동작을 해석하기 위한 컨텍스트를 제공한다.
+
+상호운용성 모델은 시설 시각화(Facility Visualization)에 특히 유용하다. 제조사별로 별도의 모니터링 대시보드를 유지하는 대신 운영자는 공통 애플리케이션을 통해 여러 로봇 플릿을 관찰할 수 있다. 로봇 식별 정보, 위치, 이동, 상태 및 기타 표준화된 정보를 결합하여 시설 전체의 통합 운영 화면을 구성할 수 있다. 이를 통해 기반 로봇 플릿을 독립적으로 관리하면서도 운영 상황 인식(Situational Awareness)을 향상시킬 수 있다.
+
+로봇 상태는 지속적으로 변화하고 동일한 정보를 여러 소비자가 필요로 할 수 있으므로 데이터 교환은 비동기 통신(Asynchronous Communication)을 기반으로 설계하는 것이 적절하다. 발행-구독 아키텍처(Publish-and-Subscribe Architecture)는 이러한 환경에 적합하다. 로봇 또는 플릿 어댑터는 표준화된 업데이트를 발행하고 승인된 애플리케이션은 필요한 정보를 구독할 수 있다. 이는 개별 생산자와 소비자 사이의 직접적인 의존성을 줄이고 운영 데이터의 확장 가능한 배포를 지원한다.
+
+공통 메시지 엔벌로프(Common Message Envelope)는 정보를 신뢰성 있게 해석하는 데 중요하다. 메시지는 출처 로봇을 식별하고 메시지 유형을 이해하며 정보가 생성된 시점을 판단하고 관련 페이로드(Payload)를 해석할 수 있는 충분한 컨텍스트를 제공해야 한다. 특히 타임스탬프(Timestamp)는 위치 또는 상태 정보가 오래될수록 운영 가치가 감소하기 때문에 로보틱스에서 중요하다. 따라서 소비자는 현재 운영 정보와 지연되거나 오래된 데이터(Stale Data)를 구별할 수 있어야 한다.
+
+좌표계 관리(Coordinate-System Management)는 독립적인 플릿을 통합할 때 중요한 실무적 문제가 된다. 두 제조사는 동일한 물리적 건물을 서로 다른 지도 원점(Map Origin), 방향, 단위, 층 정의 또는 내부 위치추정 지도로 표현할 수 있다. 단순히 숫자로 된 x 및 y 값을 전송하는 것만으로는 상호운용성을 달성할 수 없다. 시설 통합 시스템은 서로 다른 플릿의 정보를 함께 해석할 수 있도록 로봇 좌표와 공유 공간 기준(Shared Spatial Reference) 사이에 의미 있는 관계를 설정해야 한다.
+
+표준의 정보 공유 중심 접근 방식은 교통 관리(Traffic Management)에도 영향을 미친다. 로봇의 위치를 알고 있다고 해서 모든 로봇에 명령을 내리거나 모든 경로 충돌을 해결할 권한이 자동으로 주어지는 것은 아니다. 시설 수준 소프트웨어는 공유 정보를 사용하여 잠재적인 상호작용을 탐지하거나 운영 정책을 정의하고, 필요한 경우 추가 인터페이스를 통해 제조사 플릿 관리자와 통신할 수 있다. 실제 모션 실행과 즉각적인 충돌 회피는 해당 로봇 및 플릿 제어 시스템의 책임으로 유지된다.
+
+이러한 특성은 MassRobotics 접근 방식을 실행 가능한 경로 오더(Executable Route Order)를 차량으로 전달하는 데 주로 초점을 맞춘 인터페이스와 구별한다. 핵심 가치는 이기종 플릿 사이에 공유 상황 인식(Shared Awareness)을 형성하는 데 있다. 따라서 실제 시스템은 상호운용성 데이터를 공통 정보 기반(Common Information Foundation)으로 사용하면서 필요에 따라 별도의 API 또는 플릿 제어 메커니즘을 통해 미션 할당, 교통 예약, 충전 요청 및 기타 능동적 오케스트레이션(Active Orchestration) 기능을 처리할 수 있다.
+
+공유 플릿 정보에는 시설의 운영상 민감한 세부정보가 포함될 수 있으므로 보안(Security)이 필수적이다. 로봇 식별 정보, 위치, 활동 상태 및 이동 패턴은 승인된 시스템에만 제공되어야 한다. 따라서 인증(Authentication), 인가(Authorization), 암호화 통신(Encrypted Communication), 자격 증명 관리(Credential Management), 적절한 접근 경계(Access Boundary)가 상호운용성 시스템과 함께 구축되어야 한다. 데이터 구조를 표준화한다고 해서 데이터를 전송하고 사용하는 인프라를 보호해야 할 책임이 사라지는 것은 아니다.
+
+신뢰성(Reliability)은 일시적인 통신 장애도 고려해야 한다. 물리적인 차량이 계속 동작하는 동안 로봇 또는 제조사 어댑터의 연결이 끊어질 수 있다. 소비 시스템은 마지막으로 수신한 상태가 무기한 유효하다고 가정해서는 안 된다. 타임스탬프, 연결 상태 모니터링, 예상 업데이트 주기 및 오래된 데이터 처리 정책(Stale-Data Handling Policy)을 사용하면 시설 시스템은 과거 로봇 정보를 현재 정보처럼 표시하지 않고 데이터의 불확실성을 명시적으로 표현할 수 있다.
+
+이동 로봇의 기능이 점점 다양해지고 있기 때문에 확장성(Extensibility)도 필요하다. 창고 AMR, 병원 배송 로봇, 견인 차량, 점검 플랫폼, 청소 로봇 및 모바일 매니퓰레이터(Mobile Manipulator)는 공통 기준을 넘어서는 추가 정보를 필요로 할 수 있다. 실용적인 상호운용성 아키텍처는 안정적인 공유 모델을 유지하면서 모든 소비자가 모든 제조사별 기능을 이해하도록 강제하지 않고도 특수 정보를 추가할 수 있어야 한다.
+
+따라서 어댑터(Adapter)는 실제 배포 환경에서 핵심적인 엔지니어링 패턴(Engineering Pattern)이 된다. 제조사 어댑터는 독자적인 플릿 API에서 정보를 읽고, 식별자와 상태 표현을 변환하며, 필요한 경우 좌표 정보를 변환한 후 표준화된 모델로 발행할 수 있다. 이를 통해 기업 및 시설 애플리케이션이 제조사 인터페이스에 강하게 결합되는 것을 방지한다. 로봇 플랫폼이 변경되더라도 통합에 미치는 영향을 해당 어댑터 내부에 집중시켜 전체 소프트웨어 생태계로 확산되는 것을 줄일 수 있다.
+
+이러한 구조는 점진적인 도입(Gradual Adoption)을 지원한다. 시설은 상호운용성을 도입하기 위해 기존 로봇 플릿을 교체할 필요가 없다. 기존 시스템을 그대로 운영하면서 어댑터를 통해 표준화된 정보를 공통 통합 계층(Common Integration Layer)에 제공할 수 있다. 이후 새로운 로봇 제조사 역시 동일한 상호운용성 계약(Interoperability Contract)을 구현하여 환경에 참여할 수 있다. 이러한 접근 방식은 통합 복잡성을 낮추고 조직이 분리된 제조사별 플릿에서 이기종 다중 로봇 운영으로 발전할 수 있도록 한다.
+
+더 넓은 플릿 API(Fleet API) 아키텍처에서 MassRobotics AMR 상호운용성 표준은 제조사 플릿과 시설 수준 애플리케이션 사이의 공통 정보 계층(Common Information Layer)으로 활용될 수 있다. 기업 시스템, 대시보드, 분석 플랫폼(Analytics Platform), 디지털 트윈(Digital Twin), 오케스트레이션 서비스는 표준화된 로봇 정보를 사용할 수 있으며, 제조사 플릿 관리자는 플랫폼별 제어 책임을 계속 유지한다. 그 결과 공유 플릿 가시성(Shared Fleet Visibility)과 독자적인 실행 제어(Proprietary Execution Control)를 분리하는 계층형 아키텍처가 형성된다.
+
+대규모 다중 로봇 환경(Large-Scale Multi-Robot Environment)에서 이러한 분리는 전략적으로 중요하다. 상호운용성을 확보하기 위해 모든 제조사가 동일한 내부 아키텍처를 공개하거나 자체 내비게이션 스택(Navigation Stack)에 대한 제어권을 포기할 필요는 없다. 대신 시스템들은 로봇 식별 정보, 위치, 이동, 상태 및 관련 운영 정보에 대한 유용한 외부 표현에 합의한다. 이러한 공통 언어(Common Language)는 다중 제조사 가시성(Multi-Vendor Visibility), 시스템 통합 및 점진적으로 발전하는 플릿 조정(Fleet Coordination)을 위한 기반을 제공한다.
+
+##  
+
+## 09.04 Fleet Management Server API: Assign, Route, Charge [w/Code]
+
+![](images/image4.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+A Fleet Management Server API provides the operational interface through which external applications create work, assign robots, manage routes, and coordinate charging across a multi-robot fleet. Unlike a single-robot API, the server maintains a global view of missions, robot availability, shared resources, traffic conditions, and energy status. The API therefore represents fleet-level intent while individual robots remain responsible for local navigation, motion control, obstacle avoidance, and safety execution.
+
+Assignment begins when an external system submits a mission or task containing operational requirements rather than directly selecting actuator behavior. Typical information includes pickup and destination locations, required capabilities, payload constraints, priority, time requirements, and task-specific parameters. The fleet server validates the request and creates a persistent mission record so that assignment, execution, cancellation, recovery, and historical analysis can reference the same operational object.
+
+Robot assignment may be explicit or automatic. In explicit assignment, a client requests that a specific robot execute a task. In automatic assignment, the fleet server evaluates available candidates and selects an appropriate robot according to scheduling policies. Candidate evaluation can consider current position, operating state, payload capability, battery level, estimated travel cost, workload, equipment compatibility, maintenance condition, and previously committed missions.
+
+An assignment API should separate task creation from assignment whenever operational flexibility is required. A task may first enter a queued state and later become assigned when a suitable robot becomes available. This allows the scheduler to optimize the entire fleet rather than forcing clients to make robot-selection decisions independently. It also enables reassignment when a robot becomes unavailable, develops a fault, or can no longer satisfy the mission constraints.
+
+Assignment must be treated as a state transition rather than a simple database update. The server may reserve the selected robot, verify that the mission is still valid, check required resources, and then issue execution information to the vehicle interface. If any stage fails, the operation should produce a deterministic outcome. Persistent task identifiers, assignment versions, idempotency keys, and transaction boundaries help prevent duplicated work when requests are retried after network failures.
+
+Route management translates mission objectives into movement constraints that can be executed by robots. A route API may represent origins, destinations, waypoints, path segments, traffic zones, preferred paths, restricted regions, or other navigation-related information. The fleet server does not necessarily calculate every local trajectory. Instead, it provides route-level intent and constraints while the onboard navigation system generates safe motion according to the robot\'s local map, sensors, and controller.
+
+Routes should be modeled independently from instantaneous robot positions because route planning and physical execution occur at different timescales. A planned route may change because of congestion, blocked corridors, temporary work zones, unavailable elevators, or higher-priority missions. The API should therefore support route creation, revision, cancellation, and versioning so that both the server and robot can determine which route definition is currently authoritative.
+
+Shared resources make route coordination fundamentally different from single-robot navigation. Corridors, intersections, elevators, automatic doors, loading stations, docking points, and narrow passages may require reservation or sequencing. The fleet server can maintain resource ownership and grant access according to traffic policy. Route execution then becomes coordinated movement through a set of spatial and operational resources rather than merely following geometric waypoints.
+
+Traffic management can use route information to reduce deadlocks and congestion before robots physically encounter one another. The server may reserve zones, delay departures, select alternative paths, or adjust mission priorities according to current fleet conditions. Local obstacle avoidance still remains active because centralized planning cannot predict every person or object. Fleet routing and onboard navigation consequently operate as complementary layers rather than competing control mechanisms.
+
+Route updates require careful synchronization with executing robots. A new route should not silently replace an older route without identifying which mission and route version it belongs to. Sequence numbers, revision identifiers, timestamps, and acknowledgments allow both sides to determine whether an update is current. If communication is interrupted, the robot can continue according to an explicitly defined offline policy while the server marks route information as uncertain until synchronization is restored.
+
+Charging is a fleet resource-management problem rather than simply a low-battery reaction. A charging API should represent robot energy state, charging requirements, charger availability, compatibility, reservation status, and charging progress. The fleet server can use this information to coordinate when and where robots recharge while maintaining enough operational capacity to execute pending missions. Charging decisions therefore become part of scheduling and fleet optimization.
+
+A charge request may be initiated by a robot, an operator, a mission policy, or the fleet scheduler. The server evaluates whether charging is necessary and selects a compatible station according to availability and operational constraints. The resulting charging mission may include travel to the station, charger reservation, docking, charging initiation, progress monitoring, completion criteria, and release of the charging resource before the robot returns to normal availability.
+
+Battery thresholds should support operational policies rather than rely on one universal percentage. A minimum reserve may protect the robot from becoming stranded, while a preferred charging threshold can trigger opportunistic charging during periods of low demand. The scheduler may also consider predicted mission energy consumption before assignment. A robot with sufficient energy for normal operation may still be rejected for a long mission if completing it would violate the required reserve margin.
+
+Charger reservation is important when several robots share limited charging infrastructure. Without coordinated reservations, multiple robots may travel toward the same charger and create unnecessary waiting or congestion. The fleet server can treat each charging station as a managed resource with states such as available, reserved, occupied, unavailable, or faulted. Reservations should have ownership, expiration, cancellation, and recovery semantics so abandoned reservations do not permanently block capacity.
+
+Charging workflows must account for physical failures. A robot may fail to dock, a charger may stop responding, power transfer may not begin, or charging may terminate unexpectedly. The API should expose these conditions as explicit states and errors rather than hiding them behind a generic mission failure. Recovery policies can then retry docking, select another charger, request operator assistance, or place the robot into a degraded operational state.
+
+Assignment, routing, and charging are strongly interconnected. Assigning a robot changes its expected location and future energy state; selecting a route affects travel time and energy consumption; charging removes a robot from productive service while restoring future capacity. A fleet management server should therefore avoid treating these functions as independent endpoints with unrelated logic. They should operate over a shared model of robot state, missions, resources, traffic, and energy.
+
+Asynchronous execution is essential because none of these operations completes when the HTTP or RPC request returns. An assignment may require minutes of travel, a route can remain active across multiple task stages, and charging may continue for hours. APIs should acknowledge accepted operations quickly and provide persistent identifiers. Clients can then obtain progress through status endpoints, WebSocket streams, MQTT events, webhooks, or other event-driven mechanisms.
+
+A consistent lifecycle model simplifies integration. Missions and assignments can progress through created, queued, assigned, accepted, executing, completed, failed, canceled, or suspended states, while charging reservations and route plans have their own controlled transitions. External systems should react to these explicit states instead of inferring execution from raw telemetry. This makes WMS, MES, dashboards, and operator applications less dependent on robot-specific behavior.
+
+Error handling should distinguish business rejection from infrastructure failure and physical execution failure. A mission may be rejected because no compatible robot exists, a route may be impossible because a required zone is unavailable, or charging may fail because no compatible station is operational. These conditions require different responses from temporary server errors or communication timeouts. Structured error codes and contextual information enable clients to choose appropriate recovery actions.
+
+Concurrency control is necessary because several applications may attempt to modify the same mission or robot simultaneously. Optimistic version checks, leases, reservation tokens, or other ownership mechanisms can prevent conflicting assignment, route, and charging operations. Idempotent request handling is equally important so retries do not create duplicate missions, multiple charger reservations, or repeated route commands after a client loses the original response.
+
+Security should reflect the physical authority represented by each API operation. Reading robot status is fundamentally different from assigning a mission, changing a route, or commanding a robot to enter a charging station. Authentication establishes client identity, while role- or policy-based authorization restricts permitted operations and resources. Sensitive commands should also be auditable so operators can determine who requested an action, when it was accepted, and how execution progressed.
+
+Observability connects operational behavior with system-level diagnostics. Assignment decisions, route revisions, resource reservations, charging events, robot acknowledgments, failures, and recovery actions should share correlation identifiers and timestamps. Metrics can measure assignment latency, mission completion time, route delays, charger utilization, robot availability, and failed docking attempts. These records provide the foundation for troubleshooting and long-term fleet optimization.
+
+In a heterogeneous fleet, the server-facing API should remain independent of individual vendor protocols. A common assignment, route, and charging model can be translated through adapters into vendor-specific interfaces or interoperability standards. This allows enterprise applications to interact with one stable fleet contract while underlying AMRs, towing robots, inspection platforms, or other vehicles retain their native control architectures and specialized capabilities.
+
+The resulting Fleet Management Server API forms the operational bridge between enterprise demand and distributed physical execution. WMS, MES, hospital systems, manufacturing applications, or operator interfaces submit missions; the fleet server selects robots, coordinates routes and shared resources, manages charging, and observes execution; robot adapters translate those decisions into platform-specific commands. This layered structure provides scalable orchestration without transferring local safety and motion authority away from the robots.
+
+플릿 관리 서버 API(Fleet Management Server API)는 외부 애플리케이션이 다중 로봇 플릿(Multi-Robot Fleet)에 작업을 생성하고, 로봇을 할당하며, 경로를 관리하고, 충전을 조정할 수 있도록 하는 운영 인터페이스(Operational Interface)를 제공한다. 단일 로봇 API와 달리 서버는 미션(Mission), 로봇 가용성, 공유 자원, 교통 상황 및 에너지 상태를 전체적으로 파악한다. 따라서 API는 플릿 수준 의도(Fleet-Level Intent)를 표현하고, 개별 로봇은 로컬 내비게이션(Local Navigation), 모션 제어(Motion Control), 장애물 회피(Obstacle Avoidance), 안전 실행(Safety Execution)을 담당한다.
+
+할당(Assignment)은 외부 시스템이 액추에이터 동작을 직접 선택하는 대신 운영 요구사항이 포함된 미션 또는 태스크(Task)를 제출하면서 시작된다. 일반적인 정보에는 픽업 위치, 목적지, 요구 기능(Capability), 적재 제약, 우선순위, 시간 요구사항 및 태스크별 매개변수가 포함된다. 플릿 서버는 요청을 검증하고 영구적인 미션 기록(Persistent Mission Record)을 생성하여 할당, 실행, 취소, 복구 및 이력 분석이 동일한 운영 객체를 참조할 수 있도록 한다.
+
+로봇 할당은 명시적 할당(Explicit Assignment) 또는 자동 할당(Automatic Assignment) 방식으로 수행할 수 있다. 명시적 할당에서는 클라이언트가 특정 로봇에 태스크 실행을 요청한다. 자동 할당에서는 플릿 서버가 사용 가능한 후보 로봇을 평가하고 스케줄링 정책(Scheduling Policy)에 따라 적절한 로봇을 선택한다. 후보 평가에는 현재 위치, 운영 상태, 적재 능력, 배터리 수준, 예상 이동 비용, 작업 부하, 장비 호환성, 유지보수 상태 및 이미 배정된 미션 등이 고려될 수 있다.
+
+운영 유연성이 필요한 경우 할당 API(Assignment API)는 태스크 생성(Task Creation)과 할당을 분리해야 한다. 태스크는 먼저 대기 상태(Queued State)에 진입한 후 적합한 로봇이 사용 가능해지면 할당될 수 있다. 이를 통해 클라이언트가 개별적으로 로봇을 선택하도록 강제하는 대신 스케줄러(Scheduler)가 전체 플릿을 최적화할 수 있다. 또한 로봇이 사용 불가능해지거나 고장이 발생하거나 미션 제약을 더 이상 충족할 수 없는 경우 재할당(Reassignment)을 수행할 수 있다.
+
+할당은 단순한 데이터베이스 업데이트가 아니라 상태 전이(State Transition)로 처리해야 한다. 서버는 선택된 로봇을 예약하고, 미션이 여전히 유효한지 검증하며, 필요한 자원을 확인한 후 차량 인터페이스로 실행 정보를 전달할 수 있다. 어느 단계에서든 실패하면 작업은 결정론적인 결과(Deterministic Outcome)를 생성해야 한다. 영구 태스크 식별자, 할당 버전, 멱등성 키(Idempotency Key), 트랜잭션 경계(Transaction Boundary)는 네트워크 장애 이후 요청을 재시도할 때 작업이 중복되는 것을 방지하는 데 도움이 된다.
+
+경로 관리(Route Management)는 미션 목적을 로봇이 실행할 수 있는 이동 제약(Movement Constraint)으로 변환한다. 경로 API(Route API)는 출발지, 목적지, 웨이포인트(Waypoint), 경로 구간(Path Segment), 교통 구역(Traffic Zone), 선호 경로, 제한 구역 및 기타 내비게이션 관련 정보를 표현할 수 있다. 플릿 서버가 모든 로컬 궤적(Local Trajectory)을 직접 계산할 필요는 없다. 대신 경로 수준 의도와 제약을 제공하고, 온보드 내비게이션 시스템(Onboard Navigation System)이 로컬 지도, 센서 및 제어기를 이용해 안전한 움직임을 생성한다.
+
+경로 계획(Route Planning)과 물리적 실행(Physical Execution)은 서로 다른 시간 척도에서 이루어지므로 경로는 로봇의 순간적인 위치와 독립적으로 모델링되어야 한다. 계획된 경로는 혼잡, 차단된 복도, 임시 작업 구역, 사용할 수 없는 엘리베이터 또는 높은 우선순위의 미션 때문에 변경될 수 있다. 따라서 API는 경로 생성, 수정, 취소 및 버전 관리(Versioning)를 지원하여 서버와 로봇 모두 현재 어떤 경로 정의가 유효한지 판단할 수 있어야 한다.
+
+공유 자원(Shared Resource)은 경로 조정을 단일 로봇 내비게이션과 근본적으로 다르게 만든다. 복도, 교차로, 엘리베이터, 자동문, 적재 스테이션, 도킹 지점 및 좁은 통로는 예약 또는 순서 제어가 필요할 수 있다. 플릿 서버는 자원 소유권(Resource Ownership)을 관리하고 교통 정책에 따라 접근 권한을 부여할 수 있다. 이에 따라 경로 실행은 단순히 기하학적 웨이포인트를 따라가는 것이 아니라 공간적·운영적 자원 집합을 조정하면서 이동하는 과정이 된다.
+
+교통 관리(Traffic Management)는 경로 정보를 활용하여 로봇들이 실제로 서로 마주치기 전에 교착 상태(Deadlock)와 혼잡을 줄일 수 있다. 서버는 현재 플릿 상황에 따라 구역을 예약하거나 출발을 지연하고, 대체 경로를 선택하거나 미션 우선순위를 조정할 수 있다. 그러나 중앙 계획 시스템이 모든 사람이나 물체를 예측할 수 없기 때문에 로컬 장애물 회피(Local Obstacle Avoidance)는 계속 활성화되어야 한다. 따라서 플릿 경로 계획과 온보드 내비게이션은 경쟁 관계가 아니라 상호 보완적인 계층으로 동작한다.
+
+경로 업데이트(Route Update)는 실행 중인 로봇과 신중하게 동기화해야 한다. 새로운 경로는 어떤 미션과 경로 버전에 속하는지 식별하지 않은 상태에서 기존 경로를 임의로 대체해서는 안 된다. 시퀀스 번호(Sequence Number), 리비전 식별자(Revision Identifier), 타임스탬프(Timestamp), 확인 응답(Acknowledgment)을 사용하면 양측이 업데이트의 유효성을 판단할 수 있다. 통신이 중단되면 로봇은 명확하게 정의된 오프라인 정책(Offline Policy)에 따라 동작을 계속하고, 서버는 동기화가 복구될 때까지 경로 정보를 불확실한 상태로 표시할 수 있다.
+
+충전(Charging)은 단순히 배터리가 부족할 때 대응하는 문제가 아니라 플릿 자원 관리(Fleet Resource Management)의 문제이다. 충전 API(Charging API)는 로봇의 에너지 상태, 충전 요구사항, 충전기 가용성, 호환성, 예약 상태 및 충전 진행 상황을 표현해야 한다. 플릿 서버는 이러한 정보를 활용하여 대기 중인 미션을 수행할 충분한 운영 능력을 유지하면서 로봇이 언제 어디에서 충전할지를 조정할 수 있다. 따라서 충전 결정은 스케줄링과 플릿 최적화(Fleet Optimization)의 일부가 된다.
+
+충전 요청(Charge Request)은 로봇, 운영자, 미션 정책 또는 플릿 스케줄러에 의해 시작될 수 있다. 서버는 충전 필요성을 평가하고 가용성과 운영 제약을 기준으로 호환되는 충전 스테이션을 선택한다. 생성된 충전 미션(Charging Mission)은 충전 스테이션으로 이동, 충전기 예약, 도킹(Docking), 충전 시작, 진행 상태 모니터링, 완료 조건 판단 및 충전 자원 해제를 포함할 수 있으며, 이후 로봇은 정상적인 사용 가능 상태로 복귀한다.
+
+배터리 임계값(Battery Threshold)은 하나의 보편적인 비율에 의존하기보다 운영 정책을 지원하도록 설계해야 한다. 최소 예비량(Minimum Reserve)은 로봇이 운행 중 멈추는 것을 방지할 수 있고, 선호 충전 임계값(Preferred Charging Threshold)은 작업 수요가 낮을 때 기회 충전(Opportunistic Charging)을 시작하도록 설정할 수 있다. 스케줄러는 할당 전에 예상 미션 에너지 소비량도 고려할 수 있다. 정상 운행에는 충분한 에너지가 있더라도 장거리 미션 완료 후 요구되는 예비 에너지를 확보할 수 없다면 해당 로봇을 할당 대상에서 제외할 수 있다.
+
+여러 로봇이 제한된 충전 인프라를 공유할 경우 충전기 예약(Charger Reservation)이 중요하다. 조정된 예약 기능이 없으면 여러 로봇이 동일한 충전기로 이동하여 불필요한 대기나 혼잡을 발생시킬 수 있다. 플릿 서버는 각 충전 스테이션을 사용 가능(Available), 예약됨(Reserved), 사용 중(Occupied), 사용 불가(Unavailable), 고장(Faulted) 등의 상태를 갖는 관리 자원으로 처리할 수 있다. 방치된 예약이 충전 용량을 영구적으로 차단하지 않도록 예약에는 소유권, 만료, 취소 및 복구 의미 체계가 포함되어야 한다.
+
+충전 워크플로(Charging Workflow)는 물리적 장애(Physical Failure)도 고려해야 한다. 로봇이 도킹에 실패하거나 충전기가 응답하지 않을 수 있으며, 전력 전송이 시작되지 않거나 충전이 예기치 않게 종료될 수도 있다. API는 이러한 조건을 일반적인 미션 실패로 숨기지 않고 명시적인 상태와 오류로 제공해야 한다. 이후 복구 정책(Recovery Policy)은 도킹 재시도, 다른 충전기 선택, 운영자 지원 요청 또는 로봇을 성능 저하 운영 상태(Degraded Operational State)로 전환하는 등의 대응을 수행할 수 있다.
+
+할당, 경로 및 충전은 서로 강하게 연결되어 있다. 로봇을 할당하면 예상 위치와 향후 에너지 상태가 변경되고, 경로 선택은 이동 시간과 에너지 소비량에 영향을 주며, 충전은 로봇을 생산 작업에서 일시적으로 제외하는 대신 향후 운영 능력을 회복시킨다. 따라서 플릿 관리 서버는 이러한 기능을 서로 관련 없는 독립적인 엔드포인트(Endpoint)로 취급해서는 안 된다. 로봇 상태, 미션, 자원, 교통 및 에너지에 대한 공유 모델(Shared Model)을 기반으로 함께 동작해야 한다.
+
+이러한 작업은 HTTP 또는 RPC 요청이 반환되는 시점에 완료되지 않으므로 비동기 실행(Asynchronous Execution)이 필수적이다. 할당된 미션은 수분간의 이동이 필요할 수 있고, 하나의 경로는 여러 태스크 단계에 걸쳐 활성 상태로 유지될 수 있으며, 충전은 수시간 동안 지속될 수 있다. API는 승인된 작업을 신속하게 확인하고 영구 식별자를 제공해야 한다. 이후 클라이언트는 상태 엔드포인트(Status Endpoint), 웹소켓(WebSocket) 스트림, MQTT 이벤트, 웹훅(Webhook) 또는 기타 이벤트 기반 메커니즘을 통해 진행 상황을 확인할 수 있다.
+
+일관된 수명주기 모델(Lifecycle Model)은 시스템 통합을 단순화한다. 미션과 할당은 생성(Created), 대기(Queued), 할당(Assigned), 수락(Accepted), 실행(Executing), 완료(Completed), 실패(Failed), 취소(Canceled), 일시 중단(Suspended) 등의 상태를 거칠 수 있으며, 충전 예약과 경로 계획 역시 자체적으로 통제된 상태 전이를 가진다. 외부 시스템은 원시 텔레메트리(Raw Telemetry)에서 실행 상태를 추론하는 대신 이러한 명시적인 상태에 대응해야 한다. 이를 통해 WMS, MES, 대시보드 및 운영자 애플리케이션의 로봇별 동작에 대한 의존성을 줄일 수 있다.
+
+오류 처리(Error Handling)는 비즈니스 수준의 거부(Business Rejection), 인프라 장애(Infrastructure Failure), 물리적 실행 장애(Physical Execution Failure)를 구분해야 한다. 호환되는 로봇이 없어 미션이 거부될 수도 있고, 필수 구역을 사용할 수 없어 경로 생성이 불가능할 수도 있으며, 호환되는 충전 스테이션이 정상 동작하지 않아 충전에 실패할 수도 있다. 이러한 상황은 일시적인 서버 오류나 통신 타임아웃과 서로 다른 대응을 요구한다. 구조화된 오류 코드(Structured Error Code)와 컨텍스트 정보를 제공하면 클라이언트가 적절한 복구 작업을 선택할 수 있다.
+
+여러 애플리케이션이 동일한 미션이나 로봇을 동시에 변경하려 할 수 있으므로 동시성 제어(Concurrency Control)가 필요하다. 낙관적 버전 검사(Optimistic Version Check), 리스(Lease), 예약 토큰(Reservation Token) 또는 기타 소유권 메커니즘을 사용하면 충돌하는 할당, 경로 및 충전 작업을 방지할 수 있다. 멱등적 요청 처리(Idempotent Request Handling) 역시 중요하며, 이를 통해 클라이언트가 최초 응답을 받지 못해 요청을 재시도하더라도 중복 미션, 다중 충전기 예약 또는 반복적인 경로 명령이 생성되는 것을 방지할 수 있다.
+
+보안(Security)은 각 API 작업이 나타내는 물리적 권한(Physical Authority)을 반영해야 한다. 로봇 상태를 읽는 것은 미션을 할당하거나 경로를 변경하거나 로봇에게 충전 스테이션 진입을 명령하는 것과 근본적으로 다르다. 인증(Authentication)은 클라이언트의 신원을 확인하고, 역할 기반 또는 정책 기반 인가(Role-Based or Policy-Based Authorization)는 허용된 작업과 자원을 제한한다. 중요한 명령은 감사 가능(Auditable)해야 하며, 운영자는 누가 작업을 요청했고 언제 승인되었으며 실행이 어떻게 진행되었는지를 확인할 수 있어야 한다.
+
+관측 가능성(Observability)은 운영 동작과 시스템 수준 진단(System-Level Diagnostics)을 연결한다. 할당 결정, 경로 변경, 자원 예약, 충전 이벤트, 로봇 확인 응답, 장애 및 복구 작업에는 공통 상관관계 식별자(Correlation Identifier)와 타임스탬프가 사용되어야 한다. 메트릭(Metric)은 할당 지연 시간, 미션 완료 시간, 경로 지연, 충전기 이용률, 로봇 가용성 및 도킹 실패 횟수 등을 측정할 수 있다. 이러한 기록은 문제 해결과 장기적인 플릿 최적화를 위한 기반을 제공한다.
+
+이기종 플릿(Heterogeneous Fleet)에서 서버 측 API는 개별 제조사의 프로토콜과 독립적으로 유지되어야 한다. 공통 할당, 경로 및 충전 모델은 어댑터(Adapter)를 통해 제조사별 인터페이스 또는 상호운용성 표준(Interoperability Standard)으로 변환될 수 있다. 이를 통해 기업 애플리케이션은 하나의 안정적인 플릿 계약(Fleet Contract)을 사용하면서 기반 AMR, 견인 로봇(Towing Robot), 점검 플랫폼(Inspection Platform) 및 기타 차량은 고유한 제어 아키텍처와 특수 기능을 유지할 수 있다.
+
+결과적으로 플릿 관리 서버 API는 기업의 운영 요구(Enterprise Demand)와 분산된 물리적 실행(Distributed Physical Execution)을 연결하는 운영 브리지(Operational Bridge)를 형성한다. WMS, MES, 병원 시스템, 제조 애플리케이션 또는 운영자 인터페이스가 미션을 제출하면 플릿 서버가 로봇을 선택하고, 경로와 공유 자원을 조정하며, 충전을 관리하고, 실행 상태를 관찰한다. 로봇 어댑터는 이러한 결정을 플랫폼별 명령으로 변환하며, 이 계층 구조를 통해 로봇의 로컬 안전 및 모션 제어 권한을 유지하면서 확장 가능한 오케스트레이션(Scalable Orchestration)을 구현할 수 있다.
+
+##  
+
+## 09.05 Fleet Event Notification API: Webhook / WebSocket [w/Code]
+
+![](images/image5.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+Fleet event notification APIs provide the asynchronous communication layer that informs external systems when meaningful changes occur across a robot fleet. Instead of requiring WMS, MES, dashboards, or monitoring services to repeatedly poll fleet endpoints, the fleet server publishes events when missions, robots, routes, resources, chargers, or faults change state. This event-driven model reduces unnecessary requests while improving responsiveness and scalability.
+
+A fleet event represents a fact that has already occurred rather than a request for future action. Examples include a mission being assigned, a robot starting a task, a destination being reached, charging beginning, a fault being detected, or a shared resource becoming unavailable. Separating events from commands creates clearer semantics: commands express intent, while events provide immutable observations about the resulting operational state.
+
+An event model should use a common envelope so consumers can process different event types consistently. Typical metadata includes an event identifier, event type, source identifier, timestamp, schema version, correlation identifier, and payload. The payload contains information specific to the event, while the envelope provides the context required for routing, validation, tracing, deduplication, and compatibility management across distributed fleet applications.
+
+Event identifiers should be globally unique within the relevant fleet environment. A consumer may receive the same notification more than once because of retries, reconnects, or delivery guarantees. By recording processed event identifiers, the consumer can recognize duplicate notifications without repeating downstream actions. This makes event processing effectively idempotent even when the underlying communication mechanism provides at-least-once delivery rather than exactly-once delivery.
+
+Event types should describe meaningful domain changes rather than every modification to an internal database field. MissionCreated, MissionAssigned, TaskStarted, TaskCompleted, RobotOffline, RobotFaulted, RouteChanged, ChargerReserved, and ChargingCompleted are examples of domain-oriented events. A stable event taxonomy allows enterprise applications to react to operational meaning without becoming dependent on implementation details inside the fleet management server.
+
+Webhooks provide a server-to-server notification mechanism for applications that expose reachable HTTP endpoints. A subscriber registers a callback URL and selects the event categories it wants to receive. When a matching fleet event occurs, the fleet server sends an HTTP request containing the event payload to the registered endpoint. This approach is particularly suitable for enterprise systems that need discrete business notifications rather than continuous real-time data streams.
+
+Webhook delivery should be treated as a reliable asynchronous process rather than a single HTTP attempt. The receiver may temporarily be unavailable, return an error, or exceed the configured timeout. The fleet server should therefore maintain delivery state and retry failed notifications according to a controlled policy. Exponential backoff, retry limits, delivery deadlines, and dead-letter handling prevent temporary failures from causing either immediate data loss or uncontrolled request storms.
+
+A successful HTTP response confirms transport-level receipt but does not necessarily prove that every downstream business operation has completed. Webhook contracts should clearly define what acknowledgment means. In many systems, a successful response indicates that the receiver has accepted responsibility for processing the event. Long-running business logic should then continue asynchronously rather than keeping the webhook request open until all processing finishes.
+
+Webhook ordering requires careful design because independent HTTP deliveries may arrive later than expected or be retried after newer events have already been processed. Timestamps, sequence numbers, entity versions, and correlation identifiers allow consumers to determine event relationships. Applications should avoid assuming that network arrival order always equals operational occurrence order, particularly when notifications are distributed across multiple fleet server instances.
+
+Webhook security begins with transport encryption using HTTPS, but encryption alone does not authenticate the event source. The fleet server can sign notification payloads using a shared secret or asymmetric key, allowing receivers to verify message integrity and authenticity. Timestamps and unique event identifiers can also participate in replay protection so that previously captured valid notifications cannot simply be resent as new operational events.
+
+Webhook subscriptions require lifecycle management. External applications should be able to register, inspect, update, disable, and delete subscriptions while defining filters for relevant event types, robots, facilities, or mission categories. Subscription identifiers provide stable management references. Administrators also need visibility into delivery failures, retry counts, disabled endpoints, and recent notification history so integration problems can be diagnosed without examining fleet internals.
+
+WebSocket communication serves a different operational pattern. Rather than sending independent HTTP callbacks, a client establishes a persistent bidirectional connection to the fleet service. The server can then push events immediately over the existing connection. This model is well suited to operator dashboards, control-room interfaces, digital twins, and applications that require continuously changing fleet information with low notification latency.
+
+A WebSocket client can subscribe to selected event streams after authentication. Filters may restrict information by robot, mission, facility zone, event category, or severity. Server-side filtering is important because transmitting every fleet event to every connected client becomes inefficient as the number of robots and applications increases. Subscription-aware routing ensures that each client receives only the operational information it requires.
+
+WebSocket connections are inherently temporary even when applications intend them to remain continuously active. Wireless changes, proxies, server restarts, network interruptions, and client failures can terminate connections unexpectedly. Ping-pong heartbeats, connection timeouts, automatic reconnection, and session restoration mechanisms are therefore essential. A client should always assume that the connection may disappear and design recovery behavior accordingly.
+
+Reconnection creates the possibility of missing events generated while a client was disconnected. A robust API can provide sequence numbers, stream offsets, resume tokens, or a REST-based event history endpoint. After reconnecting, the client identifies the last successfully processed event and requests subsequent information before resuming live streaming. This combines real-time delivery with recoverability instead of assuming permanent network connectivity.
+
+Backpressure becomes important when the fleet produces events faster than a WebSocket client can process them. Unlimited buffering can exhaust server memory, while silently dropping important events can create an incorrect operational view. The API should therefore define queue limits and overflow behavior. Low-value telemetry may be sampled or coalesced, while mission transitions, faults, safety-related notifications, and resource changes may require durable delivery.
+
+Webhooks and WebSockets should not be viewed as competing mechanisms because they address different integration patterns. Webhooks are effective for durable server-to-server business notifications where recipients do not need persistent connections. WebSockets are effective for interactive applications requiring continuous low-latency updates. A fleet platform can expose both mechanisms over the same underlying event model so consumers select transport according to their operational requirements.
+
+The underlying event service should remain independent of notification transport. Mission, robot, traffic, charging, and resource services generate domain events, which are placed into an event distribution layer. Webhook dispatchers, WebSocket gateways, message brokers, audit services, and analytics pipelines can then consume the same events independently. This prevents mission logic from becoming directly coupled to every external notification mechanism.
+
+Durable event storage improves recovery and auditability. Important events can be retained in an event log or broker so they remain available after process restarts and temporary consumer outages. Retention policies may differ by event category: high-frequency visualization information may require only short-term storage, while mission transitions, faults, charging records, and administrative changes may need longer retention for operational analysis and traceability.
+
+Schema evolution must be controlled because event consumers often evolve independently from the fleet server. Event envelopes should include schema or API versions, and compatible changes should avoid unexpectedly removing or redefining existing fields. Consumers should generally tolerate unknown optional fields. Breaking changes may require a new event version or parallel schema so older enterprise integrations can continue operating during migration.
+
+Authorization should be applied to subscriptions as well as ordinary API requests. A monitoring dashboard may be permitted to receive status events but not security-sensitive administrative information. A facility application may access only robots belonging to its site. Authentication identifies the subscriber, while authorization policies determine which event types, robot groups, facilities, and operational details can be delivered through webhook or WebSocket channels.
+
+Observability is especially important because asynchronous notification failures can otherwise remain invisible. Metrics should track generated events, successful deliveries, failed webhooks, retry counts, WebSocket connections, reconnect frequency, queue depth, consumer lag, and delivery latency. Correlation identifiers allow an engineer to trace a mission request through assignment, robot execution, state transition, event generation, and final delivery to an enterprise application.
+
+Fleet events can also support automation beyond visualization. A MissionCompleted event may trigger a WMS inventory update, a RobotFaulted event may create a maintenance workflow, and a ChargingCompleted event may return a robot to the scheduling pool. These reactions should remain loosely coupled to the fleet server. Event consumers decide how to respond, allowing new business workflows to be added without modifying the core robot execution logic.
+
+In heterogeneous fleets, event normalization prevents every enterprise application from learning vendor-specific notification formats. Vendor adapters can translate proprietary robot and fleet events into a common event taxonomy before they enter the fleet event layer. External applications then receive consistent notifications regardless of whether the underlying platform communicates through proprietary APIs, VDA 5050, MassRobotics interoperability mechanisms, or another supported interface.
+
+The resulting architecture forms a continuous operational feedback system. Enterprise applications submit missions through fleet APIs, robots execute them through vendor or standardized interfaces, and domain events describe what actually happens. Webhooks deliver reliable business notifications, while WebSockets provide live operational streams. Together, these mechanisms transform the Fleet Management Server from a request-response service into an event-driven orchestration platform capable of supporting scalable multi-robot operations.
+
+플릿 이벤트 알림 API(Fleet Event Notification API)는 로봇 플릿 전체에서 의미 있는 변화가 발생했을 때 외부 시스템에 이를 전달하는 비동기 통신 계층(Asynchronous Communication Layer)을 제공한다. WMS, MES, 대시보드 또는 모니터링 서비스가 플릿 엔드포인트를 반복적으로 폴링(Polling)하는 대신, 미션, 로봇, 경로, 자원, 충전기 또는 장애 상태가 변경될 때 플릿 서버가 이벤트를 발행한다. 이러한 이벤트 기반 모델(Event-Driven Model)은 불필요한 요청을 줄이면서 응답성과 확장성을 향상시킨다.
+
+플릿 이벤트(Fleet Event)는 미래의 동작을 요청하는 것이 아니라 이미 발생한 사실(Fact)을 나타낸다. 예를 들어 미션 할당, 로봇의 태스크 시작, 목적지 도착, 충전 시작, 장애 감지 또는 공유 자원의 사용 불가 상태 등이 이벤트가 될 수 있다. 이벤트와 명령(Command)을 분리하면 의미 체계가 더욱 명확해진다. 명령은 의도(Intent)를 표현하고, 이벤트는 그 결과로 발생한 운영 상태에 대한 변경 불가능한 관측 정보(Immutable Observation)를 제공한다.
+
+이벤트 모델(Event Model)은 소비자가 서로 다른 이벤트 유형을 일관된 방식으로 처리할 수 있도록 공통 엔벌로프(Common Envelope)를 사용해야 한다. 일반적인 메타데이터에는 이벤트 식별자, 이벤트 유형, 소스 식별자, 타임스탬프(Timestamp), 스키마 버전(Schema Version), 상관관계 식별자(Correlation Identifier), 페이로드(Payload)가 포함된다. 페이로드에는 이벤트별 정보가 포함되고, 엔벌로프는 분산 플릿 애플리케이션의 라우팅, 검증, 추적, 중복 제거 및 호환성 관리에 필요한 컨텍스트를 제공한다.
+
+이벤트 식별자(Event Identifier)는 관련 플릿 환경 내에서 전역적으로 고유해야 한다. 재시도, 재연결 또는 전달 보장 메커니즘으로 인해 소비자가 동일한 알림을 두 번 이상 수신할 수 있기 때문이다. 소비자는 처리된 이벤트 식별자를 기록하여 후속 작업을 반복하지 않고 중복 알림을 식별할 수 있다. 이를 통해 기반 통신 메커니즘이 정확히 한 번 전달(Exactly-Once Delivery)이 아니라 최소 한 번 전달(At-Least-Once Delivery)을 제공하더라도 이벤트 처리를 실질적으로 멱등적(Idempotent)으로 만들 수 있다.
+
+이벤트 유형(Event Type)은 내부 데이터베이스 필드의 모든 변경이 아니라 의미 있는 도메인 변화(Domain Change)를 표현해야 한다. MissionCreated, MissionAssigned, TaskStarted, TaskCompleted, RobotOffline, RobotFaulted, RouteChanged, ChargerReserved, ChargingCompleted 등이 도메인 중심 이벤트(Domain-Oriented Event)의 예이다. 안정적인 이벤트 분류 체계(Event Taxonomy)를 사용하면 기업 애플리케이션이 플릿 관리 서버 내부 구현 세부사항에 의존하지 않고 운영상의 의미에 대응할 수 있다.
+
+웹훅(Webhook)은 접근 가능한 HTTP 엔드포인트를 제공하는 애플리케이션을 위한 서버 간 알림(Server-to-Server Notification) 메커니즘이다. 구독자는 콜백 URL(Callback URL)을 등록하고 수신하려는 이벤트 범주를 선택한다. 일치하는 플릿 이벤트가 발생하면 플릿 서버는 해당 이벤트 페이로드가 포함된 HTTP 요청을 등록된 엔드포인트로 전송한다. 이 방식은 지속적인 실시간 데이터 스트림보다 개별적인 비즈니스 알림이 필요한 기업 시스템에 특히 적합하다.
+
+웹훅 전달(Webhook Delivery)은 단일 HTTP 전송 시도가 아니라 신뢰성 있는 비동기 프로세스(Reliable Asynchronous Process)로 처리해야 한다. 수신 시스템이 일시적으로 사용할 수 없거나 오류를 반환하거나 설정된 타임아웃을 초과할 수 있기 때문이다. 따라서 플릿 서버는 전달 상태를 유지하고 통제된 정책에 따라 실패한 알림을 재시도해야 한다. 지수 백오프(Exponential Backoff), 재시도 횟수 제한, 전달 기한 및 데드 레터 처리(Dead-Letter Handling)는 일시적인 장애로 인한 즉각적인 데이터 손실이나 통제되지 않은 요청 폭주를 방지한다.
+
+성공적인 HTTP 응답은 전송 수준의 수신(Transport-Level Receipt)을 확인하지만 모든 후속 비즈니스 처리가 완료되었다는 의미는 아니다. 웹훅 계약(Webhook Contract)은 확인 응답(Acknowledgment)이 무엇을 의미하는지 명확하게 정의해야 한다. 많은 시스템에서 성공 응답은 수신자가 해당 이벤트를 처리할 책임을 인수했다는 의미로 사용된다. 이후 장시간 실행되는 비즈니스 로직은 모든 처리가 끝날 때까지 웹훅 요청을 유지하는 대신 비동기적으로 계속 수행되어야 한다.
+
+독립적인 HTTP 전달은 예상보다 늦게 도착할 수 있고 새로운 이벤트가 이미 처리된 후 과거 이벤트가 재시도될 수도 있으므로 웹훅 순서 보장(Webhook Ordering)은 신중하게 설계해야 한다. 타임스탬프, 시퀀스 번호(Sequence Number), 엔티티 버전(Entity Version), 상관관계 식별자를 사용하면 소비자가 이벤트 간의 관계를 판단할 수 있다. 특히 여러 플릿 서버 인스턴스에서 알림을 분산 처리할 경우 네트워크 도착 순서가 항상 실제 운영 발생 순서와 동일하다고 가정해서는 안 된다.
+
+웹훅 보안(Webhook Security)은 HTTPS를 통한 전송 암호화에서 시작하지만 암호화만으로는 이벤트의 발신자를 인증할 수 없다. 플릿 서버는 공유 비밀키(Shared Secret) 또는 비대칭 키(Asymmetric Key)를 이용해 알림 페이로드에 서명하고, 수신자는 이를 통해 메시지 무결성과 진위성을 검증할 수 있다. 타임스탬프와 고유 이벤트 식별자는 재전송 공격 방지(Replay Protection)에도 활용할 수 있어 이전에 캡처된 유효한 알림이 새로운 운영 이벤트처럼 다시 사용되는 것을 방지한다.
+
+웹훅 구독(Webhook Subscription)은 수명주기 관리(Lifecycle Management)가 필요하다. 외부 애플리케이션은 구독을 등록, 조회, 수정, 비활성화 및 삭제할 수 있어야 하며 관련 이벤트 유형, 로봇, 시설 또는 미션 범주에 대한 필터를 정의할 수 있어야 한다. 구독 식별자(Subscription Identifier)는 안정적인 관리 기준을 제공한다. 관리자는 플릿 내부를 직접 조사하지 않고도 통합 문제를 진단할 수 있도록 전달 실패, 재시도 횟수, 비활성화된 엔드포인트 및 최근 알림 이력을 확인할 수 있어야 한다.
+
+웹소켓(WebSocket) 통신은 웹훅과 다른 운영 패턴을 지원한다. 독립적인 HTTP 콜백을 반복적으로 전송하는 대신 클라이언트가 플릿 서비스와 지속적인 양방향 연결(Persistent Bidirectional Connection)을 설정한다. 서버는 기존 연결을 통해 이벤트를 즉시 푸시(Push)할 수 있다. 이 모델은 운영자 대시보드, 관제실 인터페이스(Control-Room Interface), 디지털 트윈(Digital Twin), 지속적으로 변화하는 플릿 정보를 낮은 알림 지연시간으로 필요로 하는 애플리케이션에 적합하다.
+
+웹소켓 클라이언트(WebSocket Client)는 인증 이후 선택된 이벤트 스트림(Event Stream)을 구독할 수 있다. 필터는 로봇, 미션, 시설 구역, 이벤트 범주 또는 심각도(Severity)를 기준으로 정보를 제한할 수 있다. 로봇과 애플리케이션의 수가 증가할수록 모든 플릿 이벤트를 모든 연결 클라이언트에 전송하는 방식은 비효율적이므로 서버 측 필터링(Server-Side Filtering)이 중요하다. 구독 기반 라우팅(Subscription-Aware Routing)을 사용하면 각 클라이언트가 필요한 운영 정보만 수신할 수 있다.
+
+애플리케이션이 웹소켓 연결을 지속적으로 유지하려 하더라도 연결 자체는 본질적으로 일시적이다. 무선 네트워크 변화, 프록시(Proxy), 서버 재시작, 네트워크 중단 또는 클라이언트 장애로 인해 연결이 예기치 않게 종료될 수 있다. 따라서 핑-퐁 하트비트(Ping-Pong Heartbeat), 연결 타임아웃(Connection Timeout), 자동 재연결(Automatic Reconnection), 세션 복원(Session Restoration) 메커니즘이 필수적이다. 클라이언트는 연결이 언제든지 끊어질 수 있다고 가정하고 복구 동작을 설계해야 한다.
+
+재연결(Reconnection) 과정에서는 클라이언트 연결이 끊어진 동안 생성된 이벤트를 놓칠 가능성이 있다. 견고한 API는 시퀀스 번호, 스트림 오프셋(Stream Offset), 재개 토큰(Resume Token) 또는 REST 기반 이벤트 이력 엔드포인트(Event History Endpoint)를 제공할 수 있다. 재연결 후 클라이언트는 마지막으로 정상 처리한 이벤트를 식별하고 이후 정보를 요청한 다음 실시간 스트리밍을 다시 시작한다. 이를 통해 영구적인 네트워크 연결을 가정하지 않으면서 실시간 전달과 복구 가능성을 결합할 수 있다.
+
+플릿에서 이벤트가 생성되는 속도가 웹소켓 클라이언트의 처리 속도보다 빠를 경우 백프레셔(Backpressure)가 중요해진다. 제한 없는 버퍼링은 서버 메모리를 고갈시킬 수 있고, 중요한 이벤트를 조용히 삭제하면 잘못된 운영 상태가 표시될 수 있다. 따라서 API는 큐 제한(Queue Limit)과 오버플로 동작(Overflow Behavior)을 정의해야 한다. 중요도가 낮은 텔레메트리는 샘플링하거나 병합할 수 있지만 미션 상태 전이, 장애, 안전 관련 알림 및 자원 변경은 영속적인 전달(Durable Delivery)이 필요할 수 있다.
+
+웹훅과 웹소켓은 서로 다른 통합 패턴을 해결하므로 경쟁 관계로 볼 필요가 없다. 웹훅은 수신자가 지속적인 연결을 유지할 필요가 없는 신뢰성 있는 서버 간 비즈니스 알림에 효과적이다. 웹소켓은 지속적인 저지연 업데이트가 필요한 대화형 애플리케이션에 적합하다. 플릿 플랫폼은 동일한 기반 이벤트 모델(Underlying Event Model) 위에서 두 메커니즘을 모두 제공하여 소비자가 운영 요구사항에 따라 전송 방식을 선택할 수 있도록 할 수 있다.
+
+기반 이벤트 서비스(Underlying Event Service)는 알림 전송 방식과 독립적으로 유지되어야 한다. 미션, 로봇, 교통, 충전 및 자원 서비스가 도메인 이벤트(Domain Event)를 생성하면 이를 이벤트 배포 계층(Event Distribution Layer)에 전달한다. 이후 웹훅 디스패처(Webhook Dispatcher), 웹소켓 게이트웨이(WebSocket Gateway), 메시지 브로커(Message Broker), 감사 서비스(Audit Service), 분석 파이프라인(Analytics Pipeline)이 동일한 이벤트를 독립적으로 사용할 수 있다. 이를 통해 미션 로직이 각각의 외부 알림 메커니즘에 직접 결합되는 것을 방지한다.
+
+영속적 이벤트 저장(Durable Event Storage)은 복구 가능성과 감사 가능성(Auditability)을 향상시킨다. 중요한 이벤트는 이벤트 로그(Event Log) 또는 브로커에 보존하여 프로세스가 재시작되거나 소비자가 일시적으로 중단되더라도 다시 사용할 수 있게 할 수 있다. 보존 정책(Retention Policy)은 이벤트 범주에 따라 달라질 수 있다. 고주파 시각화 정보는 단기간 저장으로 충분할 수 있지만 미션 상태 전이, 장애, 충전 기록 및 관리 변경 사항은 운영 분석과 추적성을 위해 더 오랫동안 보존해야 할 수 있다.
+
+이벤트 소비자는 플릿 서버와 독립적으로 발전하는 경우가 많으므로 스키마 진화(Schema Evolution)를 통제해야 한다. 이벤트 엔벌로프에는 스키마 또는 API 버전을 포함해야 하며, 호환 가능한 변경에서는 기존 필드를 갑자기 제거하거나 의미를 재정의하지 않아야 한다. 소비자는 일반적으로 알 수 없는 선택적 필드(Unknown Optional Field)를 허용하도록 설계하는 것이 바람직하다. 호환성을 깨뜨리는 변경에는 새로운 이벤트 버전 또는 병렬 스키마(Parallel Schema)가 필요할 수 있으며, 이를 통해 이전 기업 통합 시스템도 마이그레이션 기간 동안 계속 운영될 수 있다.
+
+인가는 일반적인 API 요청뿐 아니라 구독(Subscription)에도 적용되어야 한다. 모니터링 대시보드는 상태 이벤트를 수신할 권한은 있지만 보안에 민감한 관리 정보에는 접근할 수 없을 수 있다. 시설 애플리케이션은 자신의 사이트에 속한 로봇에만 접근하도록 제한될 수 있다. 인증(Authentication)은 구독자의 신원을 확인하고, 인가 정책(Authorization Policy)은 웹훅 또는 웹소켓 채널을 통해 전달할 수 있는 이벤트 유형, 로봇 그룹, 시설 및 운영 정보의 범위를 결정한다.
+
+비동기 알림 장애는 적절한 모니터링이 없으면 발견되지 않을 수 있기 때문에 관측 가능성(Observability)이 특히 중요하다. 메트릭(Metric)은 생성된 이벤트 수, 성공적인 전달, 실패한 웹훅, 재시도 횟수, 웹소켓 연결 수, 재연결 빈도, 큐 깊이(Queue Depth), 소비자 지연(Consumer Lag), 전달 지연시간(Delivery Latency)을 추적해야 한다. 상관관계 식별자를 사용하면 엔지니어가 미션 요청에서 할당, 로봇 실행, 상태 전이, 이벤트 생성 및 기업 애플리케이션으로의 최종 전달까지 전체 흐름을 추적할 수 있다.
+
+플릿 이벤트는 단순한 시각화를 넘어 자동화(Automation)에도 활용할 수 있다. MissionCompleted 이벤트는 WMS의 재고 업데이트를 트리거할 수 있고, RobotFaulted 이벤트는 유지보수 워크플로(Maintenance Workflow)를 생성할 수 있으며, ChargingCompleted 이벤트는 로봇을 다시 스케줄링 풀(Scheduling Pool)에 투입할 수 있다. 이러한 반응은 플릿 서버와 느슨하게 결합(Loosely Coupled)되어야 한다. 이벤트 소비자가 대응 방법을 결정하도록 하면 핵심 로봇 실행 로직을 수정하지 않고도 새로운 비즈니스 워크플로를 추가할 수 있다.
+
+이기종 플릿(Heterogeneous Fleet)에서는 이벤트 정규화(Event Normalization)를 통해 각 기업 애플리케이션이 제조사별 알림 형식을 개별적으로 학습해야 하는 문제를 방지할 수 있다. 제조사 어댑터(Vendor Adapter)는 독자적인 로봇 및 플릿 이벤트를 공통 이벤트 분류 체계(Common Event Taxonomy)로 변환한 후 플릿 이벤트 계층으로 전달할 수 있다. 외부 애플리케이션은 기반 플랫폼이 독자 API, VDA 5050, MassRobotics 상호운용성 메커니즘 또는 다른 지원 인터페이스를 사용하더라도 일관된 알림을 받을 수 있다.
+
+결과적으로 이러한 아키텍처는 지속적인 운영 피드백 시스템(Continuous Operational Feedback System)을 형성한다. 기업 애플리케이션은 플릿 API를 통해 미션을 제출하고, 로봇은 제조사별 또는 표준화된 인터페이스를 통해 이를 실행하며, 도메인 이벤트는 실제로 발생한 상황을 설명한다. 웹훅은 신뢰성 있는 비즈니스 알림을 전달하고 웹소켓은 실시간 운영 스트림(Live Operational Stream)을 제공한다. 이러한 메커니즘을 결합하면 플릿 관리 서버를 단순한 요청-응답 서비스(Request-Response Service)에서 확장 가능한 다중 로봇 운영을 지원하는 이벤트 기반 오케스트레이션 플랫폼(Event-Driven Orchestration Platform)으로 발전시킬 수 있다.
+
+##  
+
+## 09.06 Fleet Data Aggregation API: Productivity / Uptime [w/Code]
+
+![](images/image6.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+Fleet data aggregation APIs transform distributed robot telemetry and operational records into fleet-level information that can be used to measure productivity, uptime, utilization, and operational efficiency. Individual robots continuously generate positions, mission states, battery values, faults, charging records, and timestamps. Aggregation converts these fragmented observations into consistent metrics that describe how effectively the entire fleet performs over defined periods.
+
+The aggregation layer should remain logically separated from real-time robot control. Navigation, obstacle avoidance, mission execution, and safety functions require immediate operational decisions, whereas productivity analysis typically processes accumulated historical and near-real-time information. Separating these workloads prevents analytical queries from interfering with control traffic and allows each data path to use storage, retention, and processing technologies appropriate to its requirements.
+
+A common fleet data model is essential because raw telemetry from different robots may use different identifiers, units, state names, sampling frequencies, and vendor-specific fields. Before meaningful aggregation can occur, incoming data should be normalized into shared concepts such as robot, mission, task, operating state, fault, charging session, location, and timestamp. Normalization allows fleet metrics to remain comparable even when heterogeneous robot platforms operate together.
+
+Robot state aggregation provides the foundation for time-based performance metrics. Instead of examining individual status messages, the system reconstructs intervals during which each robot was working, idle, charging, unavailable, faulted, or offline. These state intervals can then be accumulated over a shift, day, week, or other reporting period. Accurate transition timestamps are critical because even small timing errors can become significant when aggregated across many robots.
+
+Uptime represents the proportion of expected operational time during which a robot or fleet is available to perform its intended function. The exact definition should be explicitly documented because organizations may classify charging, planned maintenance, standby time, or communication loss differently. A useful API therefore exposes both calculated uptime and the underlying time categories so consumers can understand how the metric was derived rather than relying on an unexplained percentage.
+
+Availability is closely related to uptime but can be defined around readiness for assignment. A robot may be powered and communicating yet temporarily unavailable because it is charging, undergoing maintenance, carrying an incompatible payload, or reserved for another task. Fleet analytics should therefore distinguish technical connectivity from operational availability. This distinction provides a more accurate picture of how much fleet capacity is actually available to scheduling services.
+
+Productivity measures how effectively robot operating time produces useful work. Depending on the application, productive work may be represented by completed missions, transported loads, traveled productive distance, inspection coverage, serviced locations, or another business outcome. A productivity API should avoid assuming that one universal metric applies to every robot type. Instead, it should combine common time-based measures with configurable domain-specific output indicators.
+
+Mission throughput is one of the most direct fleet productivity measurements. The aggregation service can count missions created, started, completed, canceled, and failed during a selected interval. Throughput can also be grouped by robot, robot type, facility zone, mission category, customer process, or shift. Combining counts with mission duration provides more information than completion totals alone because a high number of completed missions may still hide increasing execution delays.
+
+Cycle time measures the elapsed time required to complete a defined operational cycle. For a transport robot, this may include assignment, travel to pickup, loading, travel to destination, unloading, and completion confirmation. Breaking total cycle time into stages helps identify whether delays originate from robot movement, traffic congestion, waiting for equipment, loading operations, elevators, doors, or external business processes rather than from the robot itself.
+
+Utilization describes how much of the available fleet capacity is actively used. A basic calculation can compare productive execution time with available time, while more detailed models distinguish productive movement, empty travel, waiting, charging, blocked time, and idle time. These categories provide greater diagnostic value because two fleets with identical utilization percentages may have very different opportunities for improvement depending on how their nonproductive time is distributed.
+
+Idle time should be interpreted carefully because it is not always evidence of poor performance. A robot may remain idle because demand is low, because the scheduler intentionally preserves reserve capacity, or because downstream equipment cannot accept additional material. Aggregation APIs should therefore retain operational context rather than presenting idle duration as an isolated negative metric. Correlating idle periods with mission queues and resource states helps explain their cause.
+
+Travel data can be aggregated into productive distance and nonproductive distance. Productive distance represents movement directly associated with accomplishing assigned work, while empty or repositioning travel consumes time and energy without directly completing the business objective. Monitoring this ratio can reveal inefficient task allocation, poor staging locations, or route design problems. The interpretation should still consider the operational requirements of the facility.
+
+Charging analytics connect energy management with fleet productivity. Useful measurements include charging frequency, charging duration, energy-related downtime, charger occupancy, waiting time for chargers, and the distribution of charging sessions across the operating schedule. These metrics can reveal whether insufficient charging infrastructure, poor charger placement, or scheduling policies are reducing robot availability. Energy analysis can also support future capacity planning as fleet size increases.
+
+Fault aggregation provides a fleet-level view of reliability. Individual error events can be grouped by robot model, subsystem, severity, location, software version, or operating condition. Metrics such as fault frequency, downtime caused by faults, mean time between failures, and mean time to recovery help distinguish occasional incidents from systematic reliability problems. The underlying event history should remain accessible so aggregate values can be traced back to specific occurrences.
+
+Mean Time Between Failures (MTBF) describes the average operating interval between relevant failures, while Mean Time To Repair or Recover (MTTR) describes the average time required to restore operation after failure. These metrics require consistent definitions of what qualifies as a failure and when recovery begins and ends. Without common rules, comparisons between robots or reporting periods may be misleading even when the mathematical calculations are correct.
+
+Aggregation windows determine how raw events become analytical measurements. APIs may support fixed intervals such as hourly, daily, or monthly summaries, as well as user-defined time ranges. Near-real-time dashboards may use short rolling windows, while management reports may use shifts or calendar periods. The selected window should preserve enough detail to identify operational patterns without requiring clients to retrieve every raw telemetry record.
+
+Time alignment is particularly important when data originate from robots, edge computers, fleet servers, chargers, and enterprise systems. Unsynchronized clocks can distort mission duration, fault recovery time, and utilization calculations. Systems should use consistent timestamps and appropriate clock synchronization mechanisms while retaining event-generation time separately from ingestion time when necessary. This enables analytics to distinguish operational delay from communication or processing delay.
+
+The aggregation API should support dimensional filtering so clients can request metrics relevant to a specific operational question. Typical dimensions include robot identifier, robot type, fleet, site, zone, mission category, task type, shift, software version, and time interval. Filtering and grouping on the server reduce the amount of raw data transferred to dashboards and allow multiple applications to use a common analytical service.
+
+Summary endpoints can expose fleet key performance indicators without forcing every client to reproduce the same calculations. A dashboard may request fleet availability, mission throughput, utilization, average cycle time, fault downtime, and charger utilization for a selected period. More detailed endpoints can then provide per-robot or per-mission breakdowns. Maintaining calculation logic centrally prevents different applications from displaying conflicting values for the same operational metric.
+
+Metric definitions should be versioned because analytical formulas can evolve as operations mature. An organization may initially classify charging as unavailable time and later separate scheduled charging from unexpected downtime. If historical reports are recalculated using a new definition without clear versioning, comparisons become unreliable. A metric catalog containing names, formulas, units, dimensions, exclusions, and versions provides governance for fleet analytics.
+
+Data quality directly affects the credibility of productivity and uptime measurements. Missing events, duplicated telemetry, delayed messages, invalid timestamps, and inconsistent state transitions can distort aggregated results. The processing layer should detect these conditions and apply documented validation rules. Quality indicators can accompany metrics so consumers know whether a result is based on complete data or contains gaps that reduce confidence.
+
+Event-driven processing can update fleet metrics as operational events arrive. MissionCompleted can increment throughput, RobotFaulted can begin a downtime interval, RobotRecovered can close it, and ChargingStarted can update charger occupancy. Streaming aggregation enables dashboards to reflect fleet performance with low latency. Batch processing can subsequently reconcile these results against durable historical records to correct late or reordered events.
+
+Historical aggregation supports trend analysis and capacity planning. Daily or weekly summaries can reveal whether mission throughput is increasing, whether charging demand is approaching infrastructure limits, or whether a particular robot model experiences increasing downtime. Long-term data can also support comparisons between shifts, facility layouts, software releases, and operational policies. These analyses transform telemetry from a monitoring artifact into an engineering and management resource.
+
+Security and authorization remain necessary because aggregated operational data may reveal production volume, facility utilization, equipment availability, and business activity. Different users may require access to different sites, robot groups, or metric categories. Authentication identifies the requesting application, while authorization limits accessible dimensions and time ranges. Aggregated data should therefore be governed with the same discipline applied to operational fleet APIs.
+
+The resulting architecture creates a continuous path from robot activity to operational intelligence. Robots and fleet services generate telemetry and domain events, normalization converts heterogeneous information into a common model, aggregation calculates time-based and business-oriented metrics, and APIs expose productivity, uptime, utilization, reliability, and charging performance. Dashboards, analytics systems, digital twins, and enterprise applications can then use a consistent fleet-level view to improve multi-robot operations.
+
+플릿 데이터 집계 API(Fleet Data Aggregation API)는 분산된 로봇 텔레메트리(Telemetry)와 운영 기록을 플릿 수준의 정보로 변환하여 생산성(Productivity), 가동시간(Uptime), 활용률(Utilization), 운영 효율성(Operational Efficiency)을 측정할 수 있도록 한다. 개별 로봇은 위치, 미션 상태, 배터리, 장애, 충전 기록, 타임스탬프 등의 데이터를 지속적으로 생성한다.
+
+데이터 집계(Aggregation)는 이러한 분산된 관측 정보를 일관된 지표(Metric)로 변환한다. 이를 통해 특정 시간 동안 개별 로봇의 상태만 보는 것이 아니라 전체 플릿이 얼마나 효과적으로 운영되었는지를 평가할 수 있다. 즉, 로봇별 원시 데이터(Raw Data)를 운영 의사결정에 활용할 수 있는 플릿 수준 정보(Fleet-Level Information)로 변환하는 과정이다.
+
+집계 계층(Aggregation Layer)은 실시간 로봇 제어(Real-Time Robot Control)와 논리적으로 분리되어야 한다. 내비게이션, 장애물 회피, 미션 실행 및 안전 기능은 즉각적인 판단이 필요하지만 생산성 분석은 일반적으로 누적된 과거 데이터와 준실시간 정보(Near-Real-Time Information)를 처리한다.
+
+두 종류의 워크로드(Workload)를 분리하면 분석 쿼리가 로봇 제어 트래픽에 영향을 주는 것을 방지할 수 있다. 또한 실시간 제어와 분석 데이터가 각각의 요구사항에 적합한 저장소(Storage), 보존 정책(Retention Policy), 처리 기술을 사용할 수 있어 전체 시스템의 확장성과 안정성을 높일 수 있다.
+
+서로 다른 로봇의 원시 텔레메트리는 식별자, 단위, 상태 이름, 샘플링 주기 및 제조사별 필드가 서로 다를 수 있으므로 공통 플릿 데이터 모델(Common Fleet Data Model)이 필요하다. 의미 있는 집계를 수행하기 전에 데이터를 로봇, 미션, 태스크, 운영 상태, 장애, 충전 세션, 위치, 타임스탬프 등의 공통 개념으로 정규화(Normalization)해야 한다.
+
+이러한 정규화를 통해 서로 다른 제조사의 이기종 로봇 플랫폼(Heterogeneous Robot Platform)이 함께 운영되더라도 동일한 기준으로 플릿 지표를 비교할 수 있다. 제조사별 데이터 구조의 차이는 데이터 변환 계층에서 처리하고, 상위 분석 시스템은 표준화된 데이터 모델을 기준으로 생산성과 운영 상태를 분석한다.
+
+로봇 상태 집계(Robot State Aggregation)는 시간 기반 성능 지표(Time-Based Performance Metric)의 기초가 된다. 개별 상태 메시지만 분석하는 대신 각 로봇이 작업 중, 유휴 상태, 충전 중, 사용 불가, 고장 또는 오프라인 상태였던 시간 구간을 재구성한다. 이후 이러한 상태 구간을 교대시간, 일, 주 또는 다른 보고 기간별로 누적한다.
+
+정확한 상태 전이 타임스탬프(State Transition Timestamp)는 매우 중요하다. 개별 로봇에서 발생하는 작은 시간 오차라도 많은 로봇과 장시간 운영 데이터를 집계하면 상당한 차이를 발생시킬 수 있기 때문이다. 따라서 상태 변화 시점을 정확하게 기록하고 시간 동기화(Time Synchronization)를 유지해야 한다.
+
+가동시간(Uptime)은 로봇 또는 플릿이 의도된 기능을 수행할 수 있는 상태로 유지된 시간이 예상 운영시간에서 차지하는 비율을 의미한다. 그러나 충전, 계획된 유지보수, 대기시간 또는 통신 장애를 어떻게 분류하는지에 따라 계산 결과가 달라질 수 있으므로 가동시간의 정의를 명확하게 문서화해야 한다.
+
+유용한 API는 계산된 가동시간 비율만 제공하는 것이 아니라 그 계산에 사용된 세부 시간 범주(Time Category)도 함께 제공해야 한다. 이를 통해 사용자는 단순한 백분율만 보는 것이 아니라 실제 작업시간, 충전시간, 장애시간 및 기타 운영 상태가 가동시간 계산에 어떻게 반영되었는지를 이해할 수 있다.
+
+가용성(Availability)은 가동시간과 밀접한 관련이 있지만 로봇이 새로운 작업을 할당받을 준비가 되어 있는지를 중심으로 정의할 수 있다. 로봇이 전원이 켜져 있고 통신 중이더라도 충전, 유지보수, 호환되지 않는 페이로드 또는 다른 태스크 예약으로 인해 새로운 작업에 사용할 수 없을 수 있다.
+
+따라서 플릿 분석은 기술적 연결 상태(Technical Connectivity)와 운영 가용성(Operational Availability)을 구분해야 한다. 이러한 구분을 통해 단순히 온라인 상태인 로봇의 수가 아니라 실제 스케줄링 서비스(Scheduling Service)가 작업에 투입할 수 있는 플릿 용량이 어느 정도인지 정확하게 평가할 수 있다.
+
+생산성(Productivity)은 로봇의 운영시간이 얼마나 효과적으로 유용한 작업 결과를 만들어 내는지를 측정한다. 애플리케이션에 따라 완료된 미션 수, 운송한 화물량, 생산적인 이동거리, 점검 범위, 서비스 완료 위치 또는 다른 비즈니스 결과를 생산적인 작업으로 정의할 수 있다.
+
+따라서 생산성 API(Productivity API)는 모든 로봇에 하나의 보편적인 지표를 적용해서는 안 된다. 공통적인 시간 기반 지표와 함께 로봇 또는 산업 분야에 맞는 비즈니스 출력 지표(Business Output Indicator)를 설정할 수 있어야 다양한 AMR, 물류 로봇, 점검 로봇 등의 생산성을 의미 있게 비교할 수 있다.
+
+미션 처리량(Mission Throughput)은 가장 직접적인 플릿 생산성 지표 중 하나이다. 집계 서비스는 선택된 기간 동안 생성, 시작, 완료, 취소 및 실패한 미션 수를 계산할 수 있다. 처리량은 로봇, 로봇 유형, 시설 구역, 미션 범주, 고객 프로세스 또는 교대조별로 세분화할 수도 있다.
+
+단순한 완료 건수만 보는 것보다 미션 수행시간(Mission Duration)을 함께 분석하는 것이 중요하다. 완료된 미션 수가 많더라도 평균 수행시간이나 대기시간이 지속적으로 증가한다면 실제 운영 효율성이 악화되고 있을 수 있다. 따라서 처리량과 시간 지표를 함께 분석해야 정확한 생산성 평가가 가능하다.
+
+사이클 타임(Cycle Time)은 정의된 운영 사이클을 완료하는 데 필요한 전체 경과시간을 측정한다. 운송 로봇의 경우 할당, 픽업 위치로 이동, 적재, 목적지 이동, 하역 및 완료 확인 등의 단계가 포함될 수 있다. 전체 사이클을 단계별로 분해하면 지연이 발생하는 위치를 구체적으로 확인할 수 있다.
+
+이러한 분석을 통해 지연 원인이 로봇 이동 자체인지, 교통 혼잡, 장비 대기, 적재 작업, 엘리베이터, 자동문 또는 외부 비즈니스 프로세스 때문인지 구분할 수 있다. 따라서 사이클 타임 분석은 단순한 로봇 속도 평가가 아니라 전체 운영 프로세스의 병목 구간(Bottleneck)을 발견하는 수단이 된다.
+
+활용률(Utilization)은 사용 가능한 플릿 용량이 실제로 얼마나 활용되고 있는지를 나타낸다. 기본적으로 생산적인 실행시간을 사용 가능한 시간과 비교할 수 있으며, 더 상세한 모델에서는 생산 이동, 빈 이동, 대기, 충전, 차단시간(Blocked Time), 유휴시간을 별도로 구분하여 분석할 수 있다.
+
+이러한 세부 범주는 단순한 활용률 백분율보다 높은 진단 가치를 제공한다. 동일한 활용률을 가진 두 플릿이라도 한쪽은 충전시간이 많고 다른 쪽은 빈 이동이나 대기시간이 많을 수 있다. 따라서 비생산적 시간이 어떤 원인으로 발생했는지를 함께 분석해야 실제 개선 방향을 도출할 수 있다.
+
+유휴시간(Idle Time)은 항상 낮은 성능을 의미하지 않으므로 신중하게 해석해야 한다. 작업 수요가 적거나 스케줄러가 의도적으로 예비 용량(Reserve Capacity)을 유지하거나, 후속 설비가 추가 물량을 처리할 수 없어 로봇이 대기할 수도 있다. 따라서 유휴시간만 독립적으로 부정적인 지표로 해석해서는 안 된다.
+
+집계 API는 이러한 운영 컨텍스트(Operational Context)를 함께 보존해야 한다. 유휴시간을 미션 대기열(Mission Queue), 공유 자원 상태 및 생산 설비 상태와 연결하여 분석하면 로봇 자체의 문제인지, 작업 부족인지, 외부 시스템의 병목 때문인지를 보다 정확하게 판단할 수 있다.
+
+이동 데이터(Travel Data)는 생산적 이동거리(Productive Distance)와 비생산적 이동거리(Nonproductive Distance)로 집계할 수 있다. 생산적 이동은 할당된 작업 수행에 직접 관련된 이동이며, 빈 이동이나 재배치 이동은 시간과 에너지를 소비하지만 직접적인 비즈니스 결과를 생성하지 않는다.
+
+이 두 이동거리의 비율을 모니터링하면 비효율적인 태스크 할당, 부적절한 대기 위치 또는 경로 설계 문제를 발견할 수 있다. 다만 일부 재배치 이동은 운영 특성상 필수적일 수 있으므로 단순히 비생산적 이동을 최소화하는 것보다 시설의 실제 운영 조건과 함께 해석해야 한다.
+
+충전 분석(Charging Analytics)은 에너지 관리와 플릿 생산성을 연결한다. 주요 지표에는 충전 빈도, 충전시간, 에너지 관련 비가동시간, 충전기 점유율, 충전기 대기시간 및 운영 일정에 따른 충전 세션 분포가 포함될 수 있다. 이러한 정보는 충전 인프라가 플릿 운영에 미치는 영향을 보여준다.
+
+충전 데이터 분석을 통해 부족한 충전 인프라, 부적절한 충전기 위치 또는 비효율적인 스케줄링 정책이 로봇 가용성을 감소시키고 있는지 확인할 수 있다. 또한 플릿 규모가 증가할 경우 필요한 충전기 수와 배치 위치를 예측하는 용량 계획(Capacity Planning)에도 활용할 수 있다.
+
+장애 집계(Fault Aggregation)는 로봇 신뢰성(Reliability)을 플릿 수준에서 분석할 수 있게 한다. 개별 오류 이벤트를 로봇 모델, 서브시스템, 심각도, 위치, 소프트웨어 버전 또는 운영 조건별로 그룹화할 수 있다. 이를 통해 특정 로봇이나 구성요소에서 반복적으로 발생하는 문제를 식별할 수 있다.
+
+장애 빈도, 장애로 인한 비가동시간, 평균 고장 간격(Mean Time Between Failures), 평균 수리 또는 복구시간(Mean Time To Repair or Recover) 등의 지표는 일회성 장애와 구조적인 신뢰성 문제를 구분하는 데 도움이 된다. 집계된 값은 필요할 경우 개별 이벤트 기록까지 추적할 수 있어야 한다.
+
+평균 고장 간격(MTBF)은 관련 장애 사이의 평균 운영시간을 나타내며, 평균 수리 또는 복구시간(MTTR)은 장애 이후 정상 운영 상태를 복구하는 데 필요한 평균 시간을 나타낸다. 이러한 지표를 정확하게 사용하려면 어떤 상황을 장애로 정의하고 복구 시작과 종료 시점을 어떻게 판단할 것인지 명확하게 정의해야 한다.
+
+공통된 계산 규칙이 없다면 수학적으로 정확한 계산이라도 로봇 간 또는 기간별 비교에서 잘못된 해석을 만들 수 있다. 따라서 MTBF와 MTTR을 포함한 신뢰성 지표는 계산 공식뿐 아니라 장애 정의, 제외 조건 및 시간 측정 기준을 함께 관리해야 한다.
+
+집계 윈도우(Aggregation Window)는 원시 이벤트를 분석 지표로 변환하는 시간 범위를 결정한다. API는 시간별, 일별, 월별 등의 고정 구간뿐 아니라 사용자가 정의한 시간 범위를 지원할 수 있다. 준실시간 대시보드는 짧은 롤링 윈도우(Rolling Window)를 사용하고 관리 보고서는 교대시간이나 달력 기준 기간을 사용할 수 있다.
+
+선택된 집계 윈도우는 모든 원시 텔레메트리를 클라이언트가 직접 조회하지 않으면서도 운영 패턴을 파악할 수 있을 정도의 세부 정보를 유지해야 한다. 분석 목적에 따라 적절한 시간 해상도(Time Resolution)를 선택하는 것이 데이터 양과 분석 정확성 사이의 균형을 결정한다.
+
+로봇, 엣지 컴퓨터(Edge Computer), 플릿 서버, 충전기 및 기업 시스템에서 데이터가 생성되므로 시간 정렬(Time Alignment)이 중요하다. 시스템 간 시계가 동기화되지 않으면 미션 수행시간, 장애 복구시간 및 활용률 계산이 왜곡될 수 있다. 따라서 일관된 타임스탬프와 적절한 시계 동기화 메커니즘을 사용해야 한다.
+
+필요한 경우 이벤트 생성 시간(Event Generation Time)과 데이터 수집 시간(Ingestion Time)을 별도로 보존해야 한다. 이를 통해 분석 시스템은 실제 운영 과정에서 발생한 지연과 네트워크 또는 데이터 처리 과정에서 발생한 지연을 구분할 수 있으며, 늦게 도착한 이벤트도 정확한 시간 순서로 재구성할 수 있다.
+
+집계 API는 특정 운영 질문에 필요한 지표를 요청할 수 있도록 차원 기반 필터링(Dimensional Filtering)을 지원해야 한다. 일반적인 차원에는 로봇 식별자, 로봇 유형, 플릿, 사이트, 구역, 미션 범주, 태스크 유형, 교대조, 소프트웨어 버전 및 시간 구간 등이 포함된다.
+
+서버에서 필터링과 그룹화(Grouping)를 수행하면 대시보드로 전송되는 원시 데이터의 양을 줄일 수 있다. 또한 여러 애플리케이션이 동일한 분석 서비스를 이용하여 로봇별, 구역별, 시간별 또는 미션 유형별로 일관된 지표를 조회할 수 있다.
+
+요약 엔드포인트(Summary Endpoint)는 모든 클라이언트가 동일한 계산을 반복 구현하지 않고도 플릿 핵심 성과 지표(KPI)를 제공받을 수 있도록 한다. 대시보드는 선택된 기간의 플릿 가용성, 미션 처리량, 활용률, 평균 사이클 타임, 장애 비가동시간 및 충전기 활용률 등을 요청할 수 있다.
+
+보다 상세한 엔드포인트에서는 로봇별 또는 미션별 세부 데이터를 제공할 수 있다. 지표 계산 로직을 중앙에서 관리하면 서로 다른 애플리케이션이 동일한 운영 지표에 대해 서로 다른 값을 표시하는 문제를 방지하고 분석 결과의 일관성을 유지할 수 있다.
+
+운영이 발전함에 따라 분석 공식도 변경될 수 있으므로 지표 정의(Metric Definition)는 버전 관리되어야 한다. 예를 들어 초기에는 충전시간 전체를 비가용 시간으로 처리하다가 이후 계획된 충전과 예상하지 못한 비가동시간을 분리할 수 있다. 정의 변경을 명확히 관리하지 않으면 과거 데이터와 현재 데이터의 비교가 왜곡될 수 있다.
+
+따라서 지표 카탈로그(Metric Catalog)를 통해 지표 이름, 계산 공식, 단위, 분석 차원, 제외 조건 및 버전을 관리하는 것이 중요하다. 이를 통해 생산성, 가동시간, 활용률 및 신뢰성 분석에 대한 공통 기준을 유지하고 장기간의 운영 데이터를 일관되게 비교할 수 있다.
+
+데이터 품질(Data Quality)은 생산성과 가동시간 측정의 신뢰성에 직접적인 영향을 미친다. 누락된 이벤트, 중복 텔레메트리, 지연된 메시지, 잘못된 타임스탬프 및 일관되지 않은 상태 전이는 집계 결과를 왜곡할 수 있다. 따라서 처리 계층은 이러한 문제를 탐지하고 문서화된 검증 규칙을 적용해야 한다.
+
+지표와 함께 데이터 품질 표시자(Data Quality Indicator)를 제공하면 사용자가 해당 결과가 완전한 데이터를 기반으로 계산되었는지 또는 일부 데이터 누락으로 신뢰도가 낮은지를 판단할 수 있다. 이는 자동화된 운영 의사결정이나 경영 KPI 분석에서 특히 중요하다.
+
+이벤트 기반 처리(Event-Driven Processing)를 사용하면 운영 이벤트가 도착하는 즉시 플릿 지표를 업데이트할 수 있다. MissionCompleted 이벤트는 처리량을 증가시키고, RobotFaulted 이벤트는 비가동시간 계산을 시작하며, RobotRecovered 이벤트는 해당 구간을 종료하고, ChargingStarted 이벤트는 충전기 점유 상태를 갱신할 수 있다.
+
+스트리밍 집계(Streaming Aggregation)를 사용하면 대시보드가 낮은 지연시간으로 플릿 성능을 반영할 수 있다. 이후 배치 처리(Batch Processing)를 통해 영속적으로 저장된 과거 기록과 결과를 다시 비교하여 늦게 도착하거나 순서가 변경된 이벤트를 보정할 수 있다.
+
+과거 데이터 집계(Historical Aggregation)는 추세 분석(Trend Analysis)과 용량 계획을 지원한다. 일별 또는 주별 요약을 이용하면 미션 처리량이 증가하고 있는지, 충전 수요가 인프라 한계에 접근하는지, 특정 로봇 모델의 비가동시간이 증가하는지를 파악할 수 있다.
+
+장기간의 데이터는 교대조, 시설 레이아웃, 소프트웨어 릴리스 및 운영 정책 사이의 성능 비교에도 활용할 수 있다. 이를 통해 텔레메트리는 단순한 모니터링 데이터에서 벗어나 엔지니어링 개선과 운영 관리에 활용되는 핵심 정보 자원으로 발전한다.
+
+집계된 운영 데이터에는 생산량, 시설 활용도, 장비 가용성 및 비즈니스 활동을 추론할 수 있는 정보가 포함될 수 있으므로 보안(Security)과 인가(Authorization)가 필요하다. 사용자마다 접근할 수 있는 사이트, 로봇 그룹 또는 지표 범주가 다를 수 있다.
+
+인증(Authentication)은 요청하는 애플리케이션의 신원을 확인하고, 인가는 접근 가능한 분석 차원과 시간 범위를 제한한다. 따라서 집계 데이터 역시 실시간 운영 플릿 API와 동일한 수준의 데이터 거버넌스(Data Governance)와 접근 통제 원칙을 적용해야 한다.
+
+최종적으로 이러한 아키텍처는 로봇 활동에서 운영 인텔리전스(Operational Intelligence)까지 이어지는 연속적인 데이터 흐름을 형성한다. 로봇과 플릿 서비스가 텔레메트리와 도메인 이벤트를 생성하고, 정규화 계층이 이기종 정보를 공통 데이터 모델로 변환하며, 집계 계층이 시간 기반 및 비즈니스 중심 지표를 계산한다.
+
+집계 API는 생산성, 가동시간, 활용률, 신뢰성 및 충전 성능을 외부에 제공한다. 대시보드, 분석 시스템, 디지털 트윈(Digital Twin), 기업 애플리케이션은 이러한 일관된 플릿 수준 정보를 활용하여 운영 병목을 파악하고 자원 배치를 최적화하며, 궁극적으로 다중 로봇 운영(Multi-Robot Operations)의 효율성과 확장성을 향상시킬 수 있다.
+
+##  
+
+## 09.07 Heterogeneous Fleet Integration API: Adapter [w/Code]
+
+![](images/image7.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+A heterogeneous robot fleet combines mobile platforms that differ in manufacturer, hardware, navigation stack, communication protocol, data model, command semantics, and operational capability. One AMR may expose a REST API, another may communicate through MQTT, while another may use a proprietary TCP protocol or a standardized interface such as VDA 5050. The Heterogeneous Fleet Integration API Adapter provides an abstraction layer that allows these different systems to participate in a common fleet architecture without forcing every robot platform to implement the same internal software.
+
+The fundamental purpose of the adapter is to isolate vendor-specific differences from fleet-level applications. A Fleet Management Server should not require detailed knowledge of every manufacturer\'s endpoint names, message formats, state machines, authentication mechanisms, or coordinate conventions. Instead, it communicates through a stable canonical fleet interface. Each adapter translates this common interface into the protocol and semantics expected by its corresponding robot or vendor fleet manager.
+
+This architecture creates a clear separation between the canonical fleet domain and vendor integration domains. The canonical domain defines concepts such as robot identity, capability, state, mission, route, position, battery, charging, fault, and resource usage. Vendor domains may represent these concepts differently or may not expose direct equivalents. The adapter is responsible for mapping the available vendor information into the canonical representation while preserving the operational meaning of the original data.
+
+Adapters must operate in both command and information directions. In the command direction, a fleet-level request such as AssignMission, CancelMission, SendRoute, PauseRobot, or RequestCharge is translated into the corresponding vendor operation. In the opposite direction, vendor status messages, telemetry, acknowledgments, faults, and mission progress are converted into normalized fleet events and states. Bidirectional translation allows orchestration and monitoring to use the same common architecture.
+
+Protocol translation is one of the most visible adapter responsibilities. The canonical fleet API may use REST or gRPC for synchronous operations and WebSocket or a message broker for asynchronous events, while a robot platform may use MQTT topics, HTTP callbacks, ROS 2 services, proprietary sockets, or vendor SDK functions. The adapter terminates one protocol and produces another without exposing those transport differences to upstream fleet applications.
+
+Protocol conversion alone is insufficient because syntactically different messages may also have different semantics. For example, one vendor may define a robot as READY, another as IDLE, and another as AVAILABLE. These values may appear similar but can imply different conditions regarding mission acceptance, charging, payload state, or safety restrictions. Semantic mapping must therefore define exactly how vendor-specific states correspond to the canonical fleet state model.
+
+Capability normalization is equally important because heterogeneous robots cannot necessarily execute the same work. A small indoor AMR, towing robot, inspection platform, cleaning robot, and mobile manipulator may share a facility while providing fundamentally different capabilities. The adapter should expose normalized capability descriptors such as payload limits, supported mission types, docking functions, sensors, manipulation capability, operating zones, and charging compatibility.
+
+Capability information allows the fleet scheduler to make decisions without embedding manufacturer-specific rules into its core logic. Instead of asking whether a particular vendor model supports a proprietary function, the scheduler asks whether a robot satisfies the capabilities required by a mission. Vendor adapters translate platform-specific specifications into these common descriptors, allowing new robot types to enter the fleet with limited changes to orchestration services.
+
+Robot identity requires similar normalization. Vendor systems may identify robots using serial numbers, device IDs, hostnames, UUIDs, fleet-local names, or combinations of these values. The integration layer should assign or map them to stable fleet-wide identities. A registry can associate the canonical robot ID with manufacturer, model, vendor fleet, native identifier, adapter instance, software version, site, and other integration metadata.
+
+Stable identity becomes especially important when events and commands pass through several distributed services. A mission created by an enterprise system may be assigned by the fleet scheduler, translated by an adapter, executed by a robot, and reported through an event service. All of these records must refer to the same logical robot. Consistent identifiers and correlation IDs make end-to-end tracing possible across otherwise independent vendor systems.
+
+Position and coordinate translation are among the most difficult aspects of heterogeneous integration. Different robot platforms may use different map origins, orientations, units, floor identifiers, localization frames, or coordinate conventions. An adapter may therefore need to transform vendor coordinates into a facility-wide reference frame before publishing robot positions. The inverse transformation may also be required when a canonical destination is converted into a vendor-specific navigation target.
+
+Coordinate conversion should be explicitly configured and validated rather than hidden as an undocumented offset. Transform definitions may include translation, rotation, scale, floor mapping, map identifiers, and version information. When facility maps change, coordinate transformations must also be versioned. Incorrect spatial conversion can make an otherwise valid mission unsafe or impossible, so transformation errors should be treated as operational faults rather than simple formatting problems.
+
+Mission translation requires mapping high-level fleet intent into the execution model supported by each platform. The canonical mission may contain pickup, drop-off, inspection, wait, charge, or other task steps. One vendor may accept a complete multi-step mission, while another accepts only a destination at a time. The adapter can decompose the canonical mission into a sequence of supported operations while maintaining the relationship between vendor execution and the original fleet mission.
+
+Route translation introduces additional complexity. Some robots accept explicit nodes and edges, some accept named locations, some require geometric waypoints, and others perform route planning entirely inside their own fleet manager. The common API should therefore express route intent without assuming that every robot uses the same navigation representation. The adapter determines how much route information can be translated and which decisions must remain with the native platform.
+
+This principle is important for preserving safety boundaries. An integration adapter should not bypass the robot\'s certified or vendor-defined navigation and safety functions merely to achieve a uniform API. Local obstacle avoidance, emergency stopping, safety scanner processing, motor control, and other safety-critical behavior should remain under the authority of the robot platform. The fleet layer coordinates operational intent, while the robot retains responsibility for safe physical execution.
+
+VDA 5050 can reduce some integration differences by defining standardized communication structures between master control systems and compatible AGVs or AMRs. An adapter can use VDA 5050 channels and messages when a robot platform supports them, while still presenting the same canonical fleet API used for non-VDA systems. This allows the fleet architecture to benefit from standardization without requiring every connected robot to use a single interoperability technology.
+
+MassRobotics interoperability mechanisms can serve a different role by providing standardized operational information across heterogeneous mobile robots. An adapter may translate supported robot information into a shared interoperability representation for fleet visibility while another interface handles active mission control. The integration architecture can therefore combine information-oriented interoperability and command-oriented fleet control instead of treating one standard as a universal replacement for all vendor interfaces.
+
+Adapters should expose capability differences rather than pretending that every robot supports every canonical function. If a platform cannot pause an active mission, reserve a charger, accept route revisions, or report detailed fault information, the adapter should explicitly describe that limitation. Capability discovery allows upstream services to determine which operations are valid before sending commands and prevents unsupported functionality from being represented as successful integration.
+
+A canonical error model is necessary for similar reasons. Vendor systems may return numeric codes, textual messages, HTTP statuses, proprietary exceptions, or no detailed error information at all. The adapter should classify these outcomes into common categories such as invalid request, unsupported operation, robot unavailable, mission rejected, navigation failure, communication failure, authentication failure, timeout, or internal adapter error.
+
+Normalization should not discard useful vendor-specific diagnostic information. A common error category allows fleet applications to implement portable recovery behavior, while an optional vendor detail field can retain the native code and message for troubleshooting. This two-level approach provides abstraction without eliminating engineering visibility when platform-specific investigation is required.
+
+State synchronization becomes difficult because the adapter, fleet server, vendor fleet manager, and robot may temporarily disagree about the current state. Commands can be delayed, acknowledgments can be lost, and connections can fail during execution. The adapter should therefore distinguish requested state, acknowledged state, and observed state rather than assuming that sending a command immediately changes physical reality.
+
+Sequence numbers, timestamps, mission versions, correlation identifiers, and acknowledgment states help maintain synchronization. After reconnection, an adapter should query or receive the current native state and reconcile it with the canonical fleet representation. Recovery logic must determine whether an interrupted mission is still executing, completed while disconnected, failed, or requires operator intervention before new commands are issued.
+
+Offline resilience is essential because network connectivity cannot be assumed to remain continuous. When communication with a robot or vendor fleet manager is lost, the adapter should update connectivity state and prevent unsafe assumptions about robot availability. Depending on system policy, commands may be rejected, queued with expiration times, or retained for controlled retry. Stale telemetry must be marked so consumers do not mistake old information for current robot state.
+
+Event normalization connects heterogeneous robots to the fleet event architecture. Vendor notifications such as task completion, low battery, docking failure, emergency stop, or localization loss can be transformed into common domain events. These events can then be distributed through WebSocket, webhook, MQTT, or other mechanisms without requiring each enterprise application to implement vendor-specific event parsers.
+
+Event translation should preserve causality whenever possible. A completion event should identify the canonical mission and task that produced it, while a fault event should identify the robot, timestamp, severity, and relevant execution context. Correlation information allows downstream systems to reconstruct the sequence from mission request through adapter translation, robot execution, vendor response, normalized event generation, and business-system reaction.
+
+Charging integration illustrates why adapters need both common semantics and vendor-specific intelligence. Robots may use different charger protocols, docking procedures, battery thresholds, and charging state models. The canonical fleet API can describe charging intent, charger identity, reservation, progress, and completion, while the adapter maps these concepts to the mechanisms available on the specific robot platform.
+
+Shared infrastructure may require another integration boundary. Elevators, automatic doors, traffic lights, loading stations, chargers, and restricted zones can affect robots from multiple manufacturers. The fleet layer should represent these as common resources where practical, while adapters translate resource-related actions into vendor-compatible operations. This prevents each robot fleet from independently making conflicting assumptions about shared facility infrastructure.
+
+Adapter architecture should favor modular connectors rather than a large monolithic integration service containing every vendor implementation. A common adapter framework can provide authentication, configuration, logging, metrics, retry handling, event publishing, health checks, and lifecycle management. Vendor-specific modules then implement protocol communication, data mapping, command translation, and platform-specific recovery behavior.
+
+A standardized adapter interface also improves maintainability. Each adapter can implement operations such as connect, discover robots, read capabilities, submit mission, cancel mission, query state, translate event, and perform health checks. The fleet server depends on this interface rather than concrete vendor implementations. New robot vendors can therefore be introduced by adding adapter modules instead of modifying the central orchestration engine.
+
+Adapter configuration should be externalized from application code. Endpoint addresses, credentials, robot mappings, coordinate transforms, capability overrides, timeouts, retry policies, and feature flags may vary by facility and deployment. Configuration management allows the same adapter software to operate in multiple sites while preserving controlled differences. Sensitive credentials should be stored through appropriate secret-management mechanisms rather than ordinary configuration files.
+
+Version management is necessary because both canonical APIs and vendor APIs evolve. A vendor firmware update may introduce new states or remove an endpoint, while the common fleet model may gain new capabilities. The adapter provides a compatibility boundary where these changes can be absorbed. Explicit adapter versions, vendor API versions, schema versions, and compatibility matrices help operators determine which combinations have been validated.
+
+Backward compatibility should be considered when changing canonical messages. Adding an optional field is usually easier to accommodate than redefining an existing state or command. Adapters should tolerate fields they do not require where possible and explicitly reject unsupported mandatory behavior. Controlled deprecation periods allow older adapters to remain operational while new implementations migrate toward updated fleet contracts.
+
+Testing is especially important because adapter failures can appear only when real robot state and network behavior interact. Unit tests can verify field mapping and state conversion, while contract tests verify compliance with the canonical adapter interface. Robot simulators, mock vendor servers, recorded message playback, and hardware-in-the-loop environments can test mission execution, timeouts, malformed messages, reconnects, duplicated events, and fault recovery.
+
+Conformance testing should verify semantic behavior rather than only API syntax. An adapter may return a correctly formatted response while mapping a vendor state incorrectly or acknowledging a command before the robot has actually accepted it. Test scenarios should therefore validate state transitions, command lifecycle, event ordering, coordinate transformation, capability enforcement, and failure recovery under realistic operational sequences.
+
+Observability must extend across the adapter boundary. Logs should identify the canonical command, adapter instance, native vendor request, response, robot identifier, and correlation ID. Metrics can measure command latency, translation errors, reconnect frequency, event lag, failed requests, retry counts, and adapter availability. Distributed tracing can show where delays occur between enterprise requests, fleet orchestration, adapter processing, and robot execution.
+
+Health monitoring should distinguish adapter software health from downstream robot connectivity. An adapter process may be running correctly while its vendor fleet manager is unreachable, or the vendor server may be reachable while one robot is offline. Separate health indicators for process, upstream fleet API, downstream vendor interface, and individual robot communication provide more useful diagnostics than a single binary healthy or unhealthy status.
+
+Security must be enforced on both sides of the adapter. The fleet-facing interface may use OAuth, JWT, mTLS, or service identities, while the vendor side may use API keys, certificates, proprietary credentials, or local network authentication. The adapter terminates these security contexts and should avoid exposing native credentials to upstream applications. Least-privilege access should restrict each adapter to the robots and commands it actually requires.
+
+Command authorization remains a fleet-level responsibility even when translation occurs inside the adapter. A successful vendor authentication should not imply that every caller may issue movement or charging commands. The canonical API should validate caller permissions before invoking the adapter, while the adapter can enforce additional robot-specific constraints. Audit logs should preserve the original requester as well as the translated native operation.
+
+Deployment topology depends on latency, network boundaries, and facility architecture. Adapters may run centrally beside the Fleet Management Server, at an on-premise edge server, or close to vendor fleet controllers. Edge deployment can reduce latency and continue limited integration during cloud disconnection, while centralized deployment simplifies management. A hybrid design can place protocol-facing connectors locally and synchronize normalized state with central fleet services.
+
+High availability becomes important when many robots depend on a single adapter service. Stateless adapter components can be replicated behind a service endpoint when the vendor protocol permits it, while stateful sessions may require leader election, shared session storage, or controlled failover. Duplicate command prevention is essential during failover so two adapter instances do not unintentionally issue the same physical operation.
+
+Performance design should recognize that different information has different timing requirements. Mission creation and configuration requests may tolerate hundreds of milliseconds, while operational state updates may require much lower latency. High-frequency telemetry should not overload the same processing path used for critical commands. Rate limiting, batching, filtering, caching, and separate event channels can prevent noisy data sources from degrading command responsiveness.
+
+Scalability should be evaluated by robot count, event rate, command rate, number of vendor integrations, and number of facilities rather than robot count alone. Ten robots producing high-frequency telemetry may generate more integration load than hundreds of robots reporting only state transitions. Adapter services should therefore expose performance metrics that allow capacity planning based on actual communication patterns.
+
+The adapter pattern also reduces organizational coupling. Enterprise developers can work against a stable fleet API without needing detailed knowledge of every robot manufacturer, while robotics engineers can update vendor integration logic without requiring changes to WMS, MES, ERP, dashboards, or analytics applications. This separation creates a manageable contract between business systems and rapidly evolving physical automation technologies.
+
+In a large deployment, the adapter registry can become a central architectural component. It can record which adapter owns each robot, which protocol and API version it supports, its current connectivity state, available capabilities, and deployment location. Fleet services can use this registry to route commands dynamically and discover integration capabilities instead of relying on hard-coded vendor relationships.
+
+A heterogeneous integration architecture therefore forms several controlled layers: enterprise applications express business intent, the Fleet Management Server converts that intent into canonical fleet operations, the adapter layer translates canonical operations into vendor-specific semantics, and robot platforms perform physical execution. Status and events travel in the reverse direction through the same abstraction boundaries until normalized information reaches enterprise consumers.
+
+The objective is not to make every robot internally identical. Different platforms should retain the navigation algorithms, hardware capabilities, safety systems, and specialized functions that distinguish them. The purpose of the Heterogeneous Fleet Integration API Adapter is to provide a stable external contract that hides unnecessary differences while explicitly exposing differences that matter for scheduling, safety, capability, and operations.
+
+When designed correctly, the adapter becomes the compatibility layer that allows a robot fleet to evolve without repeatedly redesigning the enterprise integration architecture. New vendors, robot types, protocols, standards, and software versions can be incorporated behind a controlled canonical interface. This makes heterogeneous fleet integration an extensible platform capability rather than a collection of one-off point-to-point integrations, providing the foundation for scalable multi-vendor robot orchestration.
+
+이기종 로봇 플릿(Heterogeneous Robot Fleet)은 제조사, 하드웨어, 내비게이션 스택(Navigation Stack), 통신 프로토콜, 데이터 모델, 명령 의미 체계(Command Semantics), 운영 능력이 서로 다른 이동형 로봇을 하나의 운영 환경에서 결합한다. 어떤 AMR은 REST API를 사용하고, 다른 로봇은 MQTT 또는 독자적인 TCP 프로토콜을 사용할 수 있다.
+
+또 다른 플랫폼은 VDA 5050과 같은 표준화 인터페이스(Standardized Interface)를 사용할 수도 있다. 이기종 플릿 통합 API 어댑터(Heterogeneous Fleet Integration API Adapter)는 이러한 서로 다른 시스템이 동일한 내부 소프트웨어를 구현하지 않더라도 공통 플릿 아키텍처(Common Fleet Architecture)에 참여할 수 있도록 추상화 계층(Abstraction Layer)을 제공한다.
+
+어댑터(Adapter)의 핵심 목적은 제조사별 차이를 플릿 수준 애플리케이션으로부터 격리하는 것이다. 플릿 관리 서버(Fleet Management Server)는 각 제조사의 엔드포인트 이름, 메시지 형식, 상태 머신(State Machine), 인증 방식 또는 좌표계 규칙을 모두 알고 있을 필요가 없다.
+
+대신 플릿 관리 서버는 안정적인 표준 플릿 인터페이스(Canonical Fleet Interface)를 통해 통신한다. 각 어댑터는 이러한 공통 인터페이스를 해당 로봇 또는 제조사 플릿 관리 시스템(Vendor Fleet Manager)이 이해할 수 있는 프로토콜과 의미 체계로 변환한다.
+
+이러한 아키텍처는 표준 플릿 도메인(Canonical Fleet Domain)과 제조사 통합 도메인(Vendor Integration Domain)을 명확하게 분리한다. 표준 도메인은 로봇 식별자, 기능, 상태, 미션, 경로, 위치, 배터리, 충전, 장애 및 자원 사용과 같은 공통 개념을 정의한다.
+
+제조사별 시스템에서는 이러한 개념을 서로 다르게 표현하거나 직접 대응되는 개념을 제공하지 않을 수도 있다. 어댑터는 원본 데이터의 운영적 의미를 유지하면서 제조사가 제공하는 정보를 표준 표현(Canonical Representation)으로 매핑해야 한다.
+
+어댑터는 명령(Command)과 정보(Information)의 양방향으로 동작해야 한다. 명령 방향에서는 AssignMission, CancelMission, SendRoute, PauseRobot, RequestCharge와 같은 플릿 수준 요청을 해당 제조사의 실제 명령으로 변환한다.
+
+반대 방향에서는 제조사별 상태 메시지, 텔레메트리(Telemetry), 확인 응답(Acknowledgment), 장애 및 미션 진행 정보를 정규화된 플릿 이벤트와 상태로 변환한다. 이러한 양방향 변환을 통해 오케스트레이션과 모니터링 시스템이 동일한 공통 아키텍처를 사용할 수 있다.
+
+프로토콜 변환(Protocol Translation)은 어댑터의 가장 명확한 역할 중 하나이다. 표준 플릿 API는 동기식 작업에 REST 또는 gRPC를 사용하고 비동기 이벤트에 WebSocket 또는 메시지 브로커(Message Broker)를 사용할 수 있다.
+
+반면 실제 로봇 플랫폼은 MQTT 토픽, HTTP 콜백, ROS 2 서비스, 독자적인 소켓 또는 제조사 SDK 함수를 사용할 수 있다. 어댑터는 한쪽 프로토콜을 종단하고 다른 프로토콜로 변환함으로써 상위 플릿 애플리케이션이 이러한 전송 방식의 차이를 알 필요가 없도록 한다.
+
+그러나 단순한 프로토콜 변환만으로는 충분하지 않다. 문법적으로 서로 다른 메시지가 의미적으로도 다를 수 있기 때문이다. 예를 들어 어떤 제조사는 READY, 다른 제조사는 IDLE, 또 다른 제조사는 AVAILABLE이라는 상태를 사용할 수 있다.
+
+이러한 상태는 유사해 보이지만 실제로는 미션 수락 가능 여부, 충전 상태, 페이로드 상태 또는 안전 제한 조건에서 서로 다른 의미를 가질 수 있다. 따라서 의미 매핑(Semantic Mapping)은 제조사별 상태가 표준 플릿 상태 모델과 어떻게 대응되는지를 정확하게 정의해야 한다.
+
+기능 정규화(Capability Normalization)도 중요하다. 소형 실내 AMR, 견인 로봇(Towing Robot), 점검 플랫폼, 청소 로봇 및 모바일 매니퓰레이터(Mobile Manipulator)는 동일한 시설에서 운영될 수 있지만 수행할 수 있는 기능은 본질적으로 서로 다르다.
+
+어댑터는 적재 한계, 지원 미션 유형, 도킹 기능, 센서, 조작 기능, 운영 가능 구역 및 충전 호환성과 같은 정보를 표준화된 기능 설명자(Capability Descriptor)로 제공해야 한다. 이를 통해 상위 시스템이 로봇의 실제 수행 능력을 공통 방식으로 이해할 수 있다.
+
+기능 정보(Capability Information)를 사용하면 플릿 스케줄러가 핵심 로직에 제조사별 규칙을 포함하지 않고 의사결정을 수행할 수 있다. 특정 제조사 모델이 독자적인 기능을 지원하는지 확인하는 대신 해당 미션에 필요한 기능을 로봇이 충족하는지를 판단한다.
+
+제조사 어댑터는 플랫폼별 사양을 이러한 공통 기능 설명으로 변환한다. 따라서 새로운 로봇 유형이 추가되더라도 중앙 오케스트레이션 서비스(Orchestration Service)를 크게 수정하지 않고 기존 플릿에 통합할 수 있다.
+
+로봇 식별자(Robot Identity) 역시 정규화가 필요하다. 제조사 시스템은 일련번호, 장치 ID, 호스트 이름, UUID, 플릿 내부 이름 또는 여러 값을 조합하여 로봇을 식별할 수 있다. 통합 계층은 이러한 값을 안정적인 플릿 전체 식별자(Fleet-Wide Identity)와 연결해야 한다.
+
+로봇 레지스트리(Robot Registry)는 표준 로봇 ID와 제조사, 모델, 제조사 플릿, 네이티브 식별자, 어댑터 인스턴스, 소프트웨어 버전, 사이트 등의 통합 메타데이터를 연결할 수 있다. 이를 통해 서로 다른 시스템에서도 동일한 로봇을 일관되게 식별할 수 있다.
+
+안정적인 식별자는 이벤트와 명령이 여러 분산 서비스를 통과할 때 특히 중요하다. 기업 시스템에서 생성한 미션이 플릿 스케줄러에 의해 할당되고, 어댑터를 통해 변환되어 로봇에서 실행된 후 이벤트 서비스로 결과가 보고될 수 있다.
+
+이 모든 기록은 동일한 논리적 로봇을 참조해야 한다. 일관된 식별자와 상관관계 ID(Correlation ID)를 사용하면 서로 독립적인 제조사 시스템과 플릿 서비스 사이에서도 전체 실행 흐름을 종단 간 추적(End-to-End Tracing)할 수 있다.
+
+위치 및 좌표 변환(Position and Coordinate Translation)은 이기종 통합에서 가장 어려운 요소 중 하나이다. 서로 다른 로봇 플랫폼은 지도 원점, 방향, 단위, 층 식별자, 위치추정 프레임(Localization Frame) 또는 좌표계 규칙을 서로 다르게 사용할 수 있다.
+
+따라서 어댑터는 로봇 위치를 플릿에 전달하기 전에 제조사 좌표를 시설 공통 기준 좌표계(Facility-Wide Reference Frame)로 변환해야 할 수 있다. 반대로 표준 목적지를 제조사별 내비게이션 목표점으로 변환할 때는 역변환(Inverse Transformation)이 필요하다.
+
+좌표 변환은 문서화되지 않은 단순 오프셋으로 숨겨서는 안 되며 명시적으로 설정하고 검증해야 한다. 변환 정의에는 평행이동, 회전, 축척, 층 매핑, 지도 식별자 및 버전 정보가 포함될 수 있다.
+
+시설 지도가 변경되면 좌표 변환 정보도 함께 버전 관리되어야 한다. 잘못된 공간 좌표 변환은 정상적인 미션을 실행 불가능하거나 위험한 상태로 만들 수 있으므로 단순한 데이터 형식 오류가 아니라 운영 장애(Operational Fault)로 처리해야 한다.
+
+미션 변환(Mission Translation)은 상위 플릿의 실행 의도를 각 플랫폼이 지원하는 실행 모델로 매핑하는 과정이다. 표준 미션은 픽업, 하역, 점검, 대기, 충전 또는 기타 태스크 단계로 구성될 수 있다.
+
+어떤 제조사는 전체 다단계 미션(Multi-Step Mission)을 한 번에 수신할 수 있지만 다른 제조사는 한 번에 하나의 목적지만 받을 수 있다. 이 경우 어댑터는 원래 플릿 미션과 제조사 실행 사이의 관계를 유지하면서 표준 미션을 지원 가능한 여러 작업으로 분해할 수 있다.
+
+경로 변환(Route Translation)은 추가적인 복잡성을 가진다. 일부 로봇은 명시적인 노드(Node)와 엣지(Edge)를 수신하고, 일부는 이름이 지정된 위치를 사용하며, 다른 로봇은 기하학적 웨이포인트(Waypoint)를 요구할 수 있다.
+
+또한 어떤 시스템은 경로 계획 전체를 자체 플릿 관리 시스템에서 수행한다. 따라서 공통 API는 모든 로봇이 동일한 내비게이션 표현을 사용한다고 가정하지 않고 경로 의도(Route Intent)를 표현해야 한다. 실제 변환 가능한 범위와 네이티브 플랫폼에 남겨둘 판단은 어댑터가 결정한다.
+
+이 원칙은 안전 경계(Safety Boundary)를 유지하는 데 매우 중요하다. 통합 API를 통일하기 위해 로봇 제조사가 정의하거나 인증한 내비게이션 및 안전 기능을 어댑터가 우회해서는 안 된다.
+
+로컬 장애물 회피(Local Obstacle Avoidance), 비상 정지(Emergency Stop), 안전 스캐너 처리, 모터 제어 및 기타 안전 필수 기능(Safety-Critical Function)은 로봇 플랫폼의 권한 아래 유지되어야 한다. 플릿 계층은 운영 의도를 조정하고 로봇은 안전한 물리적 실행을 담당한다.
+
+VDA 5050은 마스터 제어 시스템(Master Control System)과 호환되는 AGV 또는 AMR 사이의 통신 구조를 표준화함으로써 일부 통합 차이를 줄일 수 있다. 로봇 플랫폼이 VDA 5050을 지원하면 어댑터는 해당 채널과 메시지를 사용할 수 있다.
+
+동시에 비 VDA 시스템에서 사용하는 것과 동일한 표준 플릿 API를 상위 계층에 제공할 수 있다. 이를 통해 모든 연결 로봇에 단일 상호운용성 기술을 강제하지 않으면서도 표준화(Standardization)의 장점을 활용할 수 있다.
+
+MassRobotics 상호운용성 메커니즘(Interoperability Mechanism)은 이기종 이동 로봇 사이에서 표준화된 운영 정보를 제공하는 다른 역할을 수행할 수 있다. 어댑터는 지원되는 로봇 정보를 공유 상호운용성 표현으로 변환하여 플릿 가시성(Fleet Visibility)을 제공할 수 있다.
+
+이와 동시에 별도의 인터페이스가 실제 미션 제어를 담당할 수 있다. 따라서 통합 아키텍처는 하나의 표준으로 모든 제조사 인터페이스를 대체하려 하기보다 정보 중심 상호운용성과 명령 중심 플릿 제어를 목적에 맞게 조합할 수 있다.
+
+어댑터는 모든 로봇이 모든 표준 기능을 지원하는 것처럼 처리하지 않고 기능 차이를 명시적으로 노출해야 한다. 특정 플랫폼이 실행 중인 미션의 일시정지, 충전기 예약, 경로 수정 또는 상세 장애 보고를 지원하지 않는다면 이러한 제한 사항을 명확하게 표현해야 한다.
+
+기능 검색(Capability Discovery)을 사용하면 상위 서비스가 명령을 전송하기 전에 어떤 작업이 유효한지 판단할 수 있다. 이를 통해 실제로 지원되지 않는 기능이 성공적으로 통합된 것처럼 표현되는 문제를 방지할 수 있다.
+
+표준 오류 모델(Canonical Error Model)도 같은 이유로 필요하다. 제조사 시스템은 숫자 오류 코드, 문자열 메시지, HTTP 상태 코드, 독자적인 예외 또는 매우 제한적인 오류 정보만 반환할 수 있다.
+
+어댑터는 이러한 결과를 잘못된 요청, 지원되지 않는 작업, 로봇 사용 불가, 미션 거부, 내비게이션 실패, 통신 장애, 인증 실패, 타임아웃 또는 내부 어댑터 오류와 같은 공통 범주로 분류해야 한다.
+
+그러나 정규화 과정에서 유용한 제조사별 진단 정보를 제거해서는 안 된다. 공통 오류 범주는 플릿 애플리케이션이 이식 가능한 복구 동작(Portable Recovery Behavior)을 구현하도록 하고, 선택적인 제조사 상세 필드는 원본 오류 코드와 메시지를 유지하여 문제 분석에 사용할 수 있도록 한다.
+
+이러한 2단계 오류 표현 방식은 추상화(Abstraction)의 장점을 제공하면서도 특정 플랫폼에 대한 엔지니어링 분석이 필요한 경우 충분한 진단 가시성(Diagnostic Visibility)을 유지할 수 있게 한다.
+
+어댑터, 플릿 서버, 제조사 플릿 관리자 및 로봇이 현재 상태에 대해 일시적으로 서로 다른 정보를 가질 수 있으므로 상태 동기화(State Synchronization)는 복잡하다. 명령 전달이 지연되거나 확인 응답이 손실될 수 있으며 실행 중 통신 연결이 끊어질 수도 있다.
+
+따라서 어댑터는 명령을 전송한 즉시 물리적 상태가 변경되었다고 가정하지 않고 요청 상태(Requested State), 확인 상태(Acknowledged State), 관측 상태(Observed State)를 구분해야 한다.
+
+시퀀스 번호(Sequence Number), 타임스탬프, 미션 버전, 상관관계 식별자 및 확인 상태는 이러한 동기화를 유지하는 데 도움이 된다. 재연결 후 어댑터는 현재 네이티브 상태를 조회하거나 수신하고 이를 표준 플릿 상태와 조정해야 한다.
+
+복구 로직(Recovery Logic)은 통신이 중단된 동안 미션이 계속 실행 중인지, 완료되었는지, 실패했는지 또는 새로운 명령을 보내기 전에 운영자의 개입이 필요한지를 판단해야 한다.
+
+네트워크 연결이 항상 유지된다고 가정할 수 없으므로 오프라인 복원력(Offline Resilience)이 중요하다. 로봇 또는 제조사 플릿 관리자와 통신이 끊어지면 어댑터는 연결 상태를 갱신하고 해당 로봇의 가용성을 잘못 판단하지 않도록 해야 한다.
+
+시스템 정책에 따라 명령을 거부하거나 만료시간과 함께 큐에 저장하거나 제한적으로 재시도할 수 있다. 오래된 텔레메트리(Stale Telemetry)는 명확하게 표시하여 소비자가 과거 데이터를 현재 로봇 상태로 오인하지 않도록 해야 한다.
+
+이벤트 정규화(Event Normalization)는 이기종 로봇을 플릿 이벤트 아키텍처와 연결한다. 태스크 완료, 배터리 부족, 도킹 실패, 비상 정지 또는 위치추정 손실과 같은 제조사별 알림을 공통 도메인 이벤트(Common Domain Event)로 변환할 수 있다.
+
+이러한 이벤트는 각 기업 애플리케이션이 제조사별 이벤트 파서를 구현하지 않아도 WebSocket, 웹훅(Webhook), MQTT 또는 다른 메커니즘을 통해 일관된 방식으로 배포될 수 있다.
+
+이벤트 변환은 가능한 한 인과관계(Causality)를 보존해야 한다. 완료 이벤트는 이를 발생시킨 표준 미션과 태스크를 식별하고, 장애 이벤트는 로봇, 타임스탬프, 심각도 및 관련 실행 컨텍스트를 포함해야 한다.
+
+상관관계 정보를 사용하면 하위 시스템이 미션 요청, 어댑터 변환, 로봇 실행, 제조사 응답, 정규화 이벤트 생성 및 비즈니스 시스템 반응까지 전체 실행 순서를 재구성할 수 있다.
+
+충전 통합(Charging Integration)은 어댑터에 공통 의미 체계와 제조사별 지능이 모두 필요한 이유를 잘 보여준다. 로봇은 서로 다른 충전기 프로토콜, 도킹 절차, 배터리 임계값 및 충전 상태 모델을 사용할 수 있다.
+
+표준 플릿 API는 충전 의도, 충전기 식별자, 예약, 진행 상태 및 완료를 공통 개념으로 표현하고, 어댑터는 이러한 개념을 특정 로봇 플랫폼에서 제공하는 실제 메커니즘으로 변환한다.
+
+공유 인프라(Shared Infrastructure)는 별도의 통합 경계가 필요할 수 있다. 엘리베이터, 자동문, 교통 신호, 적재 스테이션, 충전기 및 제한 구역은 여러 제조사의 로봇 운영에 동시에 영향을 줄 수 있다.
+
+가능한 경우 플릿 계층은 이러한 설비를 공통 자원(Common Resource)으로 표현하고, 어댑터는 자원 관련 동작을 제조사별 명령으로 변환해야 한다. 이를 통해 각 제조사 플릿이 동일한 공유 시설에 대해 서로 충돌하는 판단을 독립적으로 수행하는 것을 방지할 수 있다.
+
+어댑터 아키텍처는 모든 제조사 구현을 하나의 거대한 통합 서비스에 포함하는 모놀리식 구조(Monolithic Architecture)보다 모듈형 커넥터(Modular Connector)를 지향해야 한다.
+
+공통 어댑터 프레임워크(Common Adapter Framework)는 인증, 설정, 로깅, 메트릭, 재시도 처리, 이벤트 발행, 상태 점검 및 수명주기 관리를 제공할 수 있다. 제조사별 모듈은 프로토콜 통신, 데이터 매핑, 명령 변환 및 플랫폼별 복구 동작을 구현한다.
+
+표준화된 어댑터 인터페이스(Standardized Adapter Interface)는 유지보수성도 향상시킨다. 각 어댑터는 연결, 로봇 검색, 기능 조회, 미션 제출, 미션 취소, 상태 조회, 이벤트 변환 및 상태 점검과 같은 공통 작업을 구현할 수 있다.
+
+플릿 서버는 구체적인 제조사 구현이 아니라 이 공통 인터페이스에 의존한다. 따라서 새로운 제조사의 로봇을 추가할 때 중앙 오케스트레이션 엔진을 수정하는 대신 새로운 어댑터 모듈을 추가하는 방식으로 확장할 수 있다.
+
+어댑터 설정(Adapter Configuration)은 애플리케이션 코드와 분리되어야 한다. 엔드포인트 주소, 자격 증명, 로봇 매핑, 좌표 변환, 기능 오버라이드(Capability Override), 타임아웃, 재시도 정책 및 기능 플래그(Feature Flag)는 시설과 배포 환경에 따라 달라질 수 있다.
+
+설정 관리(Configuration Management)를 이용하면 동일한 어댑터 소프트웨어를 여러 사이트에서 사용하면서 환경별 차이를 통제할 수 있다. 민감한 자격 증명은 일반 설정 파일에 저장하지 않고 적절한 비밀정보 관리(Secret Management) 메커니즘을 사용해야 한다.
+
+표준 API와 제조사 API가 모두 변화하기 때문에 버전 관리(Version Management)가 필요하다. 제조사 펌웨어 업데이트로 새로운 상태가 추가되거나 기존 엔드포인트가 제거될 수 있으며, 공통 플릿 모델에도 새로운 기능이 추가될 수 있다.
+
+어댑터는 이러한 변화를 흡수하는 호환성 경계(Compatibility Boundary)를 제공한다. 어댑터 버전, 제조사 API 버전, 스키마 버전 및 호환성 매트릭스(Compatibility Matrix)를 명시적으로 관리하면 검증된 조합을 확인할 수 있다.
+
+표준 메시지를 변경할 때는 하위 호환성(Backward Compatibility)을 고려해야 한다. 기존 필드를 재정의하는 것보다 선택적 필드를 추가하는 것이 일반적으로 기존 어댑터와의 호환성을 유지하기 쉽다.
+
+어댑터는 가능한 경우 사용하지 않는 필드를 허용하고 필수 동작을 지원하지 못할 경우 명확하게 거부해야 한다. 통제된 폐기 기간(Deprecation Period)을 운영하면 기존 어댑터를 계속 사용하면서 새로운 플릿 계약으로 단계적으로 전환할 수 있다.
+
+실제 로봇 상태와 네트워크 동작이 결합되어야 나타나는 문제가 많기 때문에 테스트(Testing)는 특히 중요하다. 단위 테스트(Unit Test)는 필드 매핑과 상태 변환을 검증하고, 계약 테스트(Contract Test)는 표준 어댑터 인터페이스 준수 여부를 확인할 수 있다.
+
+로봇 시뮬레이터, 모의 제조사 서버(Mock Vendor Server), 기록 메시지 재생 및 하드웨어 인 더 루프(Hardware-in-the-Loop) 환경을 이용하면 미션 실행, 타임아웃, 잘못된 메시지, 재연결, 중복 이벤트 및 장애 복구를 검증할 수 있다.
+
+적합성 테스트(Conformance Testing)는 API 문법뿐 아니라 의미적 동작(Semantic Behavior)까지 검증해야 한다. 어댑터가 올바른 형식의 응답을 반환하더라도 제조사 상태를 잘못 매핑하거나 실제 로봇이 명령을 수락하기 전에 성공으로 처리할 수 있기 때문이다.
+
+따라서 테스트 시나리오는 실제 운영 순서를 기반으로 상태 전이, 명령 수명주기, 이벤트 순서, 좌표 변환, 기능 제한 적용 및 장애 복구를 검증해야 한다. 이를 통해 단순한 인터페이스 연결이 아니라 실제 운영 수준의 상호운용성을 확인할 수 있다.
+
+관측 가능성(Observability)은 어댑터 경계를 넘어 전체 시스템에 적용되어야 한다. 로그에는 표준 명령, 어댑터 인스턴스, 제조사 네이티브 요청과 응답, 로봇 식별자 및 상관관계 ID를 기록해야 한다.
+
+메트릭은 명령 지연시간, 변환 오류, 재연결 빈도, 이벤트 지연, 실패 요청, 재시도 횟수 및 어댑터 가용성을 측정할 수 있다. 분산 추적(Distributed Tracing)을 사용하면 기업 요청에서 플릿 오케스트레이션, 어댑터 처리 및 실제 로봇 실행까지 어느 구간에서 지연이 발생했는지 파악할 수 있다.
+
+상태 모니터링(Health Monitoring)은 어댑터 소프트웨어의 상태와 하위 로봇 연결 상태를 구분해야 한다. 어댑터 프로세스는 정상적으로 실행되지만 제조사 플릿 관리자와 연결되지 않을 수 있으며, 제조사 서버는 정상이어도 특정 로봇만 오프라인일 수 있다.
+
+따라서 프로세스, 상위 플릿 API, 하위 제조사 인터페이스 및 개별 로봇 통신 상태를 각각 표시해야 한다. 이러한 다단계 상태 정보는 단순한 정상 또는 비정상 표시보다 장애 위치를 정확하게 진단하는 데 유용하다.
+
+보안(Security)은 어댑터의 양쪽 인터페이스에 모두 적용되어야 한다. 플릿 측에서는 OAuth, JWT, 상호 TLS(mTLS) 또는 서비스 아이덴티티(Service Identity)를 사용할 수 있으며 제조사 측에서는 API 키, 인증서, 독자적인 자격 증명 또는 로컬 네트워크 인증을 사용할 수 있다.
+
+어댑터는 이러한 서로 다른 보안 컨텍스트(Security Context)를 종단하며 제조사 네이티브 자격 증명을 상위 애플리케이션에 노출해서는 안 된다. 최소 권한(Least Privilege) 원칙에 따라 각 어댑터가 필요한 로봇과 명령에만 접근할 수 있도록 제한해야 한다.
+
+명령 인가(Command Authorization)는 변환이 어댑터에서 수행되더라도 플릿 수준의 책임으로 유지된다. 제조사 인증에 성공했다고 해서 모든 호출자가 이동이나 충전 명령을 실행할 수 있다는 의미는 아니다.
+
+표준 API는 어댑터를 호출하기 전에 요청자의 권한을 검증해야 하며, 어댑터에서도 추가적인 로봇별 제약을 적용할 수 있다. 감사 로그(Audit Log)는 원래 요청자와 변환된 네이티브 작업을 함께 보존하여 명령의 출처와 실행 경로를 추적할 수 있도록 해야 한다.
+
+배포 토폴로지(Deployment Topology)는 지연시간, 네트워크 경계 및 시설 아키텍처에 따라 달라진다. 어댑터는 플릿 관리 서버와 함께 중앙에서 실행하거나 온프레미스 엣지 서버(On-Premise Edge Server) 또는 제조사 플릿 컨트롤러 근처에 배치할 수 있다.
+
+엣지 배포(Edge Deployment)는 지연시간을 줄이고 클라우드 연결이 끊어진 상황에서도 제한적인 통합 기능을 유지할 수 있다. 중앙 배포는 관리가 단순하다는 장점이 있다. 하이브리드 구조에서는 프로토콜 커넥터를 현장에 두고 정규화된 상태를 중앙 플릿 서비스와 동기화할 수 있다.
+
+많은 로봇이 하나의 어댑터 서비스에 의존하는 경우 고가용성(High Availability)이 중요하다. 제조사 프로토콜이 허용한다면 상태 비저장 어댑터(Stateless Adapter)를 여러 인스턴스로 복제할 수 있다.
+
+상태를 유지하는 세션(Stateful Session)의 경우 리더 선출(Leader Election), 공유 세션 저장소 또는 통제된 장애조치(Failover)가 필요할 수 있다. 장애조치 과정에서 두 어댑터가 동일한 물리적 명령을 중복 실행하지 않도록 중복 명령 방지(Duplicate Command Prevention)가 필수적이다.
+
+성능 설계(Performance Design)는 정보 종류마다 서로 다른 시간 요구사항이 있다는 점을 고려해야 한다. 미션 생성이나 설정 요청은 수백 밀리초 수준의 지연을 허용할 수 있지만 운영 상태 업데이트는 더 낮은 지연시간이 필요할 수 있다.
+
+고주파 텔레메트리가 중요 명령과 동일한 처리 경로를 과부하시키지 않도록 해야 한다. 속도 제한(Rate Limiting), 배치 처리(Batching), 필터링, 캐싱 및 별도의 이벤트 채널을 사용하면 많은 데이터가 발생하더라도 명령 응답성을 안정적으로 유지할 수 있다.
+
+확장성(Scalability)은 단순히 로봇 수만으로 평가해서는 안 된다. 로봇 수, 이벤트 발생률, 명령 발생률, 제조사 통합 수 및 시설 수를 함께 고려해야 한다. 고주파 텔레메트리를 생성하는 10대의 로봇이 상태 전이만 보고하는 수백 대의 로봇보다 더 높은 통합 부하를 만들 수도 있다.
+
+따라서 어댑터 서비스는 실제 통신 패턴을 기반으로 용량 계획(Capacity Planning)을 수행할 수 있도록 성능 메트릭을 제공해야 한다. 이를 통해 플릿 규모 확대나 새로운 제조사 추가 전에 필요한 컴퓨팅 및 네트워크 자원을 예측할 수 있다.
+
+어댑터 패턴(Adapter Pattern)은 조직 간 결합도(Organizational Coupling)도 줄여준다. 기업 시스템 개발자는 각 로봇 제조사의 상세 기술을 이해하지 않고 안정적인 플릿 API를 사용할 수 있으며, 로봇 엔지니어는 WMS, MES, ERP, 대시보드 또는 분석 시스템을 변경하지 않고 제조사 통합 로직을 수정할 수 있다.
+
+이러한 분리는 비즈니스 시스템과 빠르게 변화하는 물리 자동화 기술 사이에 관리 가능한 계약(Manageable Contract)을 형성한다. 결과적으로 로봇 플랫폼이 변경되더라도 상위 기업 애플리케이션의 변경 범위를 최소화할 수 있다.
+
+대규모 배포에서는 어댑터 레지스트리(Adapter Registry)가 핵심 아키텍처 구성요소가 될 수 있다. 레지스트리는 각 로봇을 담당하는 어댑터, 지원 프로토콜과 API 버전, 현재 연결 상태, 사용 가능한 기능 및 배포 위치를 기록할 수 있다.
+
+플릿 서비스는 하드코딩된 제조사 관계에 의존하지 않고 레지스트리를 이용해 명령을 동적으로 라우팅하고 통합 기능을 검색할 수 있다. 이를 통해 새로운 로봇이나 어댑터가 추가될 때 중앙 서비스의 구성 변경을 최소화할 수 있다.
+
+이기종 통합 아키텍처는 결국 여러 개의 통제된 계층으로 구성된다. 기업 애플리케이션은 비즈니스 의도(Business Intent)를 표현하고, 플릿 관리 서버는 이를 표준 플릿 작업(Canonical Fleet Operation)으로 변환하며, 어댑터 계층은 다시 제조사별 의미 체계와 프로토콜로 변환한다.
+
+로봇 플랫폼은 최종적으로 물리적 작업을 실행한다. 상태와 이벤트는 반대 방향으로 동일한 추상화 경계를 통과하면서 정규화되고, 최종적으로 기업 시스템과 운영 애플리케이션에 일관된 형태로 전달된다.
+
+이 구조의 목적은 모든 로봇의 내부 구조를 동일하게 만드는 것이 아니다. 서로 다른 플랫폼은 각자의 내비게이션 알고리즘, 하드웨어 기능, 안전 시스템 및 특화 기능을 그대로 유지해야 한다.
+
+이기종 플릿 통합 API 어댑터의 목적은 불필요한 차이는 숨기면서 스케줄링, 안전, 기능 및 운영에 실제로 영향을 미치는 차이는 명확하게 노출하는 안정적인 외부 계약(Stable External Contract)을 제공하는 것이다.
+
+적절하게 설계된 어댑터는 기업 통합 아키텍처를 반복적으로 재설계하지 않고도 로봇 플릿을 지속적으로 발전시킬 수 있는 호환성 계층(Compatibility Layer)이 된다. 새로운 제조사, 로봇 유형, 프로토콜, 표준 및 소프트웨어 버전을 통제된 표준 인터페이스 뒤에 추가할 수 있다.
+
+이를 통해 이기종 플릿 통합은 개별 시스템마다 별도로 개발하는 일회성 지점 간 통합(Point-to-Point Integration)의 집합이 아니라 확장 가능한 플랫폼 기능(Extensible Platform Capability)으로 발전한다. 이러한 구조는 장기적으로 확장 가능한 다중 제조사 로봇 오케스트레이션(Multi-Vendor Robot Orchestration)을 구현하기 위한 핵심 기반이 된다.
+
+##  
+
+## 09.08 Fleet API Load Balancing and High Availability
+
+![](images/image8.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+Fleet API load balancing and high availability are architectural capabilities that keep multi-robot operations accessible when request volume increases or individual servers, processes, networks, or infrastructure components fail. In an industrial fleet, the API layer may simultaneously receive mission requests, robot state updates, telemetry, operator commands, WebSocket connections, and enterprise-system queries. The architecture must distribute these workloads while preventing a single component from becoming a critical point of failure.
+
+Load balancing distributes incoming API traffic across multiple healthy service instances rather than directing every request to one server. When several Fleet Management Server API instances provide the same logical service, a load balancer can select an appropriate instance for each request. This improves throughput, supports horizontal scaling, and allows an unhealthy instance to be removed from active traffic without making the entire fleet API unavailable.
+
+A fleet platform should distinguish load balancing from high availability. Load balancing primarily distributes workload, while high availability focuses on maintaining service when components fail. The two concepts complement each other but solve different problems. A perfectly balanced system can still fail if all instances depend on one database, message broker, authentication service, or network gateway. High availability therefore requires redundancy throughout the critical service path.
+
+Stateless API services are generally easier to scale and recover than services that maintain client-specific state inside local memory. A stateless REST or gRPC service can process a request using external data stores and shared services without depending on previous requests reaching the same instance. If one server fails, another instance can continue processing subsequent requests because the essential fleet state exists outside the failed process.
+
+Not every fleet service can be completely stateless. WebSocket sessions, protocol adapters, robot connections, distributed locks, mission execution contexts, and streaming subscriptions may maintain temporary or persistent state. These components require explicit state-management strategies. Session information can be stored in distributed systems, reconstructed after reconnection, or assigned to a controlled owner so failover does not create inconsistent robot commands.
+
+Load-balancing algorithms should reflect the characteristics of fleet traffic. Round-robin distribution is simple and works well when instances have similar capacity and requests have comparable processing cost. Least-connections strategies can be useful when long-lived connections are involved. Weighted algorithms allow servers with greater CPU, memory, or network capacity to receive more traffic. Selection should be based on measured workload behavior rather than algorithm popularity.
+
+HTTP-based Fleet APIs can usually be distributed through Layer 7 load balancing because requests contain application-level information such as paths, headers, authentication metadata, and service names. Routing rules can send mission requests, telemetry queries, administrative operations, or analytics traffic to different backend pools. This separation prevents high-volume analytical traffic from consuming resources needed by operational command interfaces.
+
+Layer 4 load balancing may be appropriate when traffic needs to be distributed primarily according to network connections rather than application-level HTTP information. It can provide efficient forwarding for TCP-based protocols or services where the load balancer should not interpret the application payload. Fleet architectures may use Layer 4 and Layer 7 balancing together depending on the protocol and service boundary.
+
+Health checks determine whether a service instance should receive traffic. A basic liveness check verifies that the process is running, but this does not prove that the service can perform useful fleet operations. Readiness checks should confirm that essential dependencies such as databases, message brokers, configuration services, or required downstream interfaces are sufficiently available before the instance is added to the active traffic pool.
+
+Health checks should avoid becoming excessively strict. If an optional analytics dependency is unavailable, removing an otherwise functional mission API from service may unnecessarily reduce fleet availability. Dependency checks should therefore distinguish critical dependencies from degraded but noncritical capabilities. A service may report healthy, degraded, or unavailable states rather than representing every condition through a single binary status.
+
+Automatic failure detection allows a load balancer or service orchestrator to stop sending new requests to an unhealthy instance. Existing operations must then be handled according to their execution semantics. Read-only queries can usually be retried safely, while robot commands require greater care because the client may not know whether a failed request reached the robot before the server connection disappeared.
+
+Idempotency is therefore essential for reliable command APIs. A mission creation or charging request should include a stable request identifier or idempotency key. If the client retries after a timeout, the server can determine whether the operation has already been accepted instead of creating a duplicate mission. This is particularly important during load-balancer retries, process restarts, network failures, and active-instance failover.
+
+Automatic retries should not be applied blindly to every operation. A GET request for robot status can normally be retried with little risk, while repeating a non-idempotent movement or resource-control command may create unsafe behavior. Retry policy should consider operation semantics, failure type, timeout stage, and acknowledgment state. Critical commands should use explicit command identifiers and state reconciliation instead of uncontrolled repetition.
+
+Timeouts are another essential reliability mechanism. Without bounded connection and request timeouts, failed downstream services can consume threads, sockets, memory, and connection pools until healthy API instances also become unavailable. Fleet services should define connection, request, command acknowledgment, and downstream dependency timeouts appropriate to each operation rather than relying on one global timeout.
+
+Circuit breakers protect the fleet API when a downstream dependency repeatedly fails. After a defined failure threshold, the circuit breaker temporarily stops forwarding requests to that dependency and returns a controlled failure or degraded response. This prevents repeated attempts from exhausting system resources. After a recovery interval, limited requests can test whether the dependency has returned to service before normal traffic resumes.
+
+Bulkhead isolation further limits failure propagation by separating resources used by different workloads. Mission control, telemetry ingestion, analytics queries, event delivery, and administrative operations can use separate thread pools, queues, connection pools, or service instances. A sudden telemetry surge or expensive report query should not consume all resources required for robot mission commands. Isolation preserves critical fleet functions during abnormal load.
+
+Rate limiting protects APIs from accidental or malicious request floods. Limits may be applied by client, tenant, endpoint, robot, facility, or operation type. High-frequency robot telemetry may require very different thresholds from mission creation or administrative configuration. Rate limits should therefore reflect expected operational behavior and should return clear responses that allow legitimate clients to reduce request frequency or apply controlled backoff.
+
+Backpressure is necessary when incoming data arrives faster than downstream components can process it. Instead of accepting unlimited work until memory is exhausted, services can use bounded queues, flow control, message-broker retention, sampling, or producer throttling. Low-priority telemetry may be aggregated or dropped according to policy, while mission transitions, faults, and safety-relevant operational events should receive stronger delivery guarantees.
+
+WebSocket connections require special load-balancing consideration because they remain open much longer than ordinary HTTP requests. Once established, a connection generally remains associated with the selected backend instance. Load balancers must support WebSocket upgrade and long-lived connections, while backend services need heartbeat, timeout, reconnect, and subscription recovery mechanisms for cases where the selected instance fails.
+
+Sticky sessions can keep a client connected to the same backend when local session state is unavoidable, but excessive dependence on affinity reduces failover flexibility. A more resilient design stores important subscription or session information in shared infrastructure or allows it to be reconstructed after reconnect. The client can reconnect through the load balancer to another healthy instance and restore its subscriptions using a resume token or event offset.
+
+Event delivery infrastructure should also be highly available. If webhook or WebSocket notifications depend on a single in-memory queue, server failure may lose events even though the API itself quickly recovers. Durable message brokers or event stores can decouple event production from delivery. Multiple notification workers can then process retained events, and failed deliveries can be retried without requiring the original Fleet Management Server instance to remain alive.
+
+Message brokers themselves require redundancy when they are part of the critical fleet architecture. Replication, partitioning, persistent storage, and broker failover can prevent one broker node from becoming a single point of failure. The exact mechanism depends on the selected messaging technology, but the architectural principle remains consistent: critical mission and event information should not exist only inside one transient process.
+
+Database availability is equally important because horizontally replicated API servers still depend on shared operational state. Mission records, robot registrations, resource reservations, charging assignments, and configuration may reside in databases. Replication and failover mechanisms can improve availability, but database consistency requirements must be defined carefully because conflicting mission or resource states can be more dangerous than temporarily rejecting new requests.
+
+Strong consistency may be appropriate for operations such as exclusive resource reservation, mission ownership, or command deduplication. Other information, such as historical analytics or noncritical dashboard data, may tolerate eventual consistency. Treating every data item with the same consistency requirement can increase latency and complexity unnecessarily. Fleet architecture should classify state according to its operational consequences.
+
+Distributed locking or ownership mechanisms may be required when only one service instance should control a particular robot, mission, or shared resource. Multiple API replicas must not independently believe they own the same exclusive operation. Leader election, leases, fencing tokens, database constraints, or distributed coordination services can establish controlled ownership while allowing another instance to take over after failure.
+
+Fencing is especially important during failover because the previous owner may not actually be dead; it may only be temporarily disconnected from the coordination system. Without protection, both old and new owners could issue commands after a network partition. A monotonically increasing ownership token or equivalent mechanism allows downstream components to reject commands from an outdated owner and reduces split-brain risk.
+
+Split-brain conditions occur when multiple nodes independently believe they are authoritative. In robot fleet control, this can lead to conflicting mission assignments, duplicate resource reservations, or contradictory robot commands. High-availability design should therefore prioritize correctness of ownership over uninterrupted command acceptance. Temporarily refusing a command can be preferable to allowing two controllers to control the same physical resource simultaneously.
+
+Active-active architecture allows multiple service instances to process traffic concurrently. This model provides efficient resource utilization and can scale horizontally, particularly for stateless API services, telemetry processing, and read-heavy workloads. However, shared state and exclusive command ownership must be carefully coordinated so concurrent instances do not generate conflicting decisions.
+
+Active-passive architecture maintains a standby instance or site that assumes responsibility when the active component fails. It can simplify ownership for stateful services but may provide lower infrastructure utilization and slower recovery than active-active designs. Fleet systems may combine both approaches, using active-active API gateways and stateless services while maintaining active-passive control for selected stateful components.
+
+High availability should also consider failure domains beyond individual processes. Multiple service instances running on the same physical server do not protect against host failure. Instances should be distributed across independent hosts, virtual machines, availability zones, network paths, or power domains according to the required reliability level. Industrial on-premise deployments may use redundant edge servers rather than public-cloud availability zones.
+
+Network architecture can itself contain single points of failure. Redundant switches, interfaces, gateways, and communication paths may be required for critical installations. However, API high availability cannot guarantee robot connectivity when the robot\'s wireless link is unavailable. The system should distinguish server-side service availability from communication availability to individual robots and represent these conditions separately.
+
+On-premise and cloud components may be combined in a hybrid fleet architecture. Time-sensitive fleet control can remain on local edge infrastructure while cloud services provide analytics, historical storage, remote monitoring, or enterprise integration. If the WAN connection fails, the local system should continue the functions required for safe and useful operation rather than making every robot dependent on continuous cloud connectivity.
+
+Graceful degradation defines which capabilities remain available during partial failures. If analytics storage becomes unavailable, mission execution may continue while reports are delayed. If an external ERP connection fails, already accepted robot missions may continue while new enterprise requests are queued or rejected. Explicit degradation policies prevent unrelated subsystem failures from unnecessarily stopping the complete fleet.
+
+Recovery objectives should be defined according to business and operational requirements. Recovery Time Objective (RTO) describes how quickly a service should be restored after failure, while Recovery Point Objective (RPO) describes how much data loss can be tolerated. A mission-control database may require very small RPO, whereas historical analytics data may tolerate delayed replication or reconstruction from event logs.
+
+State recovery after restart must be designed rather than assumed. A restarted Fleet Management Server should rebuild knowledge of active missions, robot states, reservations, charging sessions, and outstanding commands from durable storage and current robot observations. It should not assume that physical execution stopped simply because the server restarted. Reconciliation compares stored intent with observed reality before normal command processing resumes.
+
+Rolling updates and maintenance should occur without stopping the entire API service. When multiple instances are available, one instance can be marked unready, allowed to drain existing connections, updated, validated, and returned to service before the next instance is processed. Connection draining is especially important for long-running requests and WebSocket sessions because abrupt termination can create unnecessary reconnect storms.
+
+Blue-green or canary deployment strategies can further reduce software-update risk. A new version can receive a limited portion of traffic while metrics and errors are observed before broader rollout. In fleet control systems, deployment validation should include command semantics and state synchronization, not merely HTTP success rates. A technically responsive API can still be operationally incorrect if mission behavior changes unexpectedly.
+
+Observability is required to determine whether load balancing and high availability are actually working. Useful metrics include request rate, latency percentiles, error rate, active connections, queue depth, retry count, circuit-breaker state, backend health, database replication status, broker lag, failover events, and robot communication state. These measurements should be correlated across the complete request path.
+
+Distributed tracing can follow a mission request through an API gateway, load balancer, fleet service, database, adapter, message broker, and robot interface. Correlation IDs make it possible to distinguish application delay from network delay or downstream robot response time. During a failover incident, tracing can also reveal whether a request was processed before the original instance became unavailable.
+
+Logging should preserve enough information for operational investigation without exposing credentials or sensitive tokens. Logs can record request identifiers, service instances, robot IDs, mission IDs, routing decisions, retries, failover actions, and error categories. Centralized log aggregation is important because requests may move between different service instances before and after failures.
+
+Alerting should focus on conditions requiring operational attention rather than every transient error. A single failed request may recover automatically, while increasing latency, repeated failovers, growing queue depth, loss of database quorum, or a large percentage of disconnected robots may indicate systemic problems. Alerts should therefore combine thresholds, duration, and operational context to reduce unnecessary alarm fatigue.
+
+Capacity planning is part of high availability because a redundant architecture is not truly resilient if remaining instances cannot handle the workload after one instance fails. An N-instance cluster operating near full capacity may overload immediately when one server is removed. Systems should maintain sufficient spare capacity so expected traffic remains serviceable during planned maintenance or representative failure scenarios.
+
+Load testing should include normal traffic, peak traffic, and failure conditions. Testing only the maximum request rate on a healthy cluster does not demonstrate high availability. Engineers should deliberately terminate service instances, disconnect databases or brokers, introduce latency, interrupt network links, and reconnect WebSocket clients while observing whether the system continues to satisfy defined operational requirements.
+
+Chaos and fault-injection testing can expose hidden dependencies that ordinary functional testing misses. Controlled experiments can simulate process crashes, delayed responses, packet loss, partial network partitions, unavailable adapters, and stale service discovery. These tests should be performed in appropriate environments with safety controls, especially when physical robots are involved, so resilience is validated without creating uncontrolled motion.
+
+Security infrastructure must also be redundant. If every replicated Fleet API instance depends on one authentication server or certificate-validation service, failure of that component can make the entire API inaccessible. Identity, authorization, key management, and certificate services should be included in availability analysis while maintaining fail-closed behavior where security policy requires it.
+
+Multi-site disaster recovery extends availability beyond local infrastructure failures. Critical fleet configuration, software artifacts, schemas, and selected operational records can be replicated to a secondary environment. Disaster recovery procedures should define how services are restored, how robot and facility ownership is transferred, and how stale commands are prevented from executing after recovery.
+
+The fleet API should communicate degraded conditions clearly to clients. Standard health endpoints, error models, retry guidance, and service-status information allow WMS, MES, dashboards, and adapters to react appropriately. A client that receives a temporary unavailable response should behave differently from one receiving an invalid mission request or an unsupported robot capability error.
+
+High availability should never be interpreted as permission to move safety-critical decisions into distributed cloud services. Emergency stopping, collision avoidance, protective sensing, and immediate motion safety should remain local to the robot or certified safety system. Fleet API redundancy protects orchestration and operational continuity, but it does not replace local functional safety mechanisms.
+
+A robust architecture therefore uses several complementary layers. Load balancers distribute traffic among healthy API instances, service discovery identifies available components, stateless services scale horizontally, durable stores preserve operational state, message brokers decouple asynchronous workloads, and coordination mechanisms protect exclusive ownership. Health checks, retries, circuit breakers, bulkheads, and observability limit and expose failures.
+
+The resulting Fleet API platform should continue useful operation when individual components fail, while avoiding duplicate commands, conflicting ownership, stale state, and uncontrolled retries. The objective is not simply maximum uptime of HTTP endpoints, but dependable continuity of multi-robot orchestration. Load balancing provides scalable traffic distribution, while high availability ensures that fleet services remain controlled, recoverable, and operationally consistent as the robot system grows.
+
+:::
+
+플릿 API 로드 밸런싱(Fleet API Load Balancing)과 고가용성(High Availability)은 플릿 규모, 요청량 및 시스템 복잡성이 증가하더라도 다중 로봇 오케스트레이션(Multi-Robot Orchestration) 서비스를 안정적으로 응답하고 지속적으로 사용할 수 있도록 하는 핵심 인프라 기술이다.
+
+실제 운영 환경의 플릿 API는 미션 할당, 로봇 상태 업데이트, 경로 요청, 충전 작업, 텔레메트리(Telemetry), 이벤트 구독, 대시보드 및 기업 시스템의 요청을 동시에 처리할 수 있다. 따라서 이러한 워크로드를 효율적으로 분산하면서 단일 장애점(Single Point of Failure)을 방지하는 구조가 필요하다.
+
+로드 밸런싱(Load Balancing)은 동일한 논리적 플릿 API를 제공하는 여러 서비스 인스턴스(Service Instance)에 들어오는 요청을 분산한다. WMS, MES, 운영자, 로봇 및 분석 시스템의 모든 트래픽을 하나의 서버로 보내는 대신 로드 밸런서가 각 연결이나 요청에 적절한 백엔드 인스턴스를 선택한다.
+
+이러한 구조는 처리량(Throughput)과 수평 확장성(Horizontal Scalability)을 향상시킨다. 또한 개별 서버가 장애 또는 유지보수로 서비스에서 제외되더라도 다른 인스턴스가 요청을 처리할 수 있으므로 전체 플릿 API를 중단하지 않고 운영을 지속할 수 있다.
+
+로드 밸런싱과 고가용성은 서로 관련되어 있지만 해결하는 문제는 다르다. 로드 밸런싱은 주로 워크로드를 분산하는 기술이고, 고가용성은 구성요소에 장애가 발생하더라도 서비스를 유지하는 것을 목적으로 한다.
+
+여러 API 서버가 하나의 로드 밸런서 뒤에서 동작하더라도 모든 서버가 하나의 데이터베이스, 메시지 브로커(Message Broker), 인증 서비스 또는 네트워크 게이트웨이에 의존한다면 전체 구조는 여전히 취약하다. 따라서 고가용성은 핵심 플릿 서비스 경로 전체에 걸친 중복성과 복구 체계를 요구한다.
+
+상태 비저장 API 서비스(Stateless API Service)는 수평 확장을 구현하기 위한 가장 단순한 기반을 제공한다. 상태 비저장 REST 또는 gRPC 인스턴스는 특정 클라이언트 정보가 로컬 메모리에만 저장되어 있다고 가정하지 않는다.
+
+모든 정상 인스턴스는 공유 데이터베이스, 캐시, 레지스트리 및 메시징 인프라를 이용하여 다음 요청을 처리할 수 있다. 하나의 API 프로세스가 장애를 일으켜도 클라이언트가 이전 요청을 처리했던 물리 서버를 알 필요 없이 다른 인스턴스로 트래픽을 전환할 수 있다.
+
+그러나 일부 플릿 기능은 본질적으로 상태 유지(Stateful) 특성을 가진다. WebSocket 세션, 로봇 프로토콜 연결, 어댑터 세션, 분산 잠금(Distributed Lock), 활성 미션 소유권 및 이벤트 스트림 구독은 여러 상호작용에 걸쳐 실행 컨텍스트를 유지할 수 있다.
+
+이러한 구성요소에는 명확한 상태 관리(State Management) 전략이 필요하다. 중요한 상태를 외부 저장소에 저장하거나 복제하고, 재연결 시 복구하거나, 통제된 서비스 소유자에게 할당하여 장애조치(Failover) 과정에서 서로 충돌하는 로봇 명령이 발생하지 않도록 해야 한다.
+
+로드 밸런싱 알고리즘(Load-Balancing Algorithm)은 트래픽 특성에 맞게 선택해야 한다. 라운드 로빈(Round-Robin)은 백엔드 인스턴스의 처리 능력이 유사하고 요청 비용이 비슷할 때 적합하다. 최소 연결(Least-Connections)은 장시간 유지되는 세션을 분산하는 데 유용하다.
+
+가중치 기반 라우팅(Weighted Routing)은 더 높은 성능을 가진 서버가 더 많은 트래픽을 처리하도록 할 수 있다. 동적 방식에서는 지연시간, CPU 사용률, 큐 깊이(Queue Depth), 상태 정보 등을 함께 고려하여 서비스 인스턴스를 선택할 수도 있다.
+
+계층 7 로드 밸런싱(Layer 7 Load Balancing)은 HTTP 기반 플릿 API에서 특히 유용하다. URL, 헤더, 인증 컨텍스트, 서비스 이름 및 요청 유형과 같은 애플리케이션 수준 정보를 기반으로 라우팅 결정을 수행할 수 있기 때문이다.
+
+예를 들어 미션 제어 요청은 운영 서비스 풀(Service Pool)로 전달하고 분석 쿼리는 별도의 처리 자원으로 전달할 수 있다. 이를 통해 고비용 보고서나 과거 데이터 분석 요청이 시간 민감도가 높은 플릿 운영 명령에 필요한 자원을 소비하는 것을 방지할 수 있다.
+
+계층 4 로드 밸런싱(Layer 4 Load Balancing)은 애플리케이션 수준 정보보다 TCP 연결을 중심으로 트래픽을 분산해야 할 때 사용할 수 있다. 애플리케이션 페이로드를 해석할 필요가 없는 프로토콜에 효율적인 전달 방식을 제공한다.
+
+플릿 아키텍처에서는 계층 4와 계층 7 방식을 함께 사용할 수 있다. 각 서비스 경계에서 라우팅 지능, 성능 및 프로토콜 독립성 사이의 요구사항을 고려하여 적절한 방식을 선택하는 것이 중요하다.
+
+상태 점검(Health Check)은 어떤 서비스 인스턴스가 새로운 트래픽을 받을 수 있는지를 결정한다. 생존 점검(Liveness Check)은 프로세스가 실행되고 있는지를 확인하고, 준비 상태 점검(Readiness Check)은 실제로 유효한 요청을 처리할 수 있는지를 확인한다.
+
+플릿 API 프로세스가 실행 중이더라도 데이터베이스, 설정 서비스, 브로커 또는 필수 어댑터에 접근하지 못할 수 있다. 준비 상태 정보를 사용하면 로드 밸런서가 실제 업무를 수행할 수 없는 인스턴스로 운영 트래픽을 보내는 것을 방지할 수 있다.
+
+의존성 점검(Dependency Check)은 핵심 장애와 비핵심 장애를 구분해야 한다. 과거 분석 저장소가 사용할 수 없더라도 미션 제어 API는 로봇을 계속 할당하고 모니터링할 수 있다. 이러한 상황에서 인스턴스 전체를 제거하면 오히려 시스템 용량을 불필요하게 감소시킬 수 있다.
+
+따라서 상태 모델은 단순한 정상과 비정상뿐 아니라 정상(Healthy), 성능 저하(Degraded), 사용 불가(Unavailable) 상태를 표현할 수 있다. 이를 통해 일부 기능이 제한되더라도 가능한 운영 기능을 계속 유지할 수 있다.
+
+서비스가 비정상 상태가 되면 로드 밸런서 또는 서비스 오케스트레이터(Service Orchestrator)는 새로운 요청을 해당 인스턴스로 보내지 않아야 한다. 그러나 기존 작업은 더 신중하게 처리해야 한다. 연결 실패만으로는 요청한 작업이 실제 실행되었는지 알 수 없는 경우가 있기 때문이다.
+
+이 문제는 물리적인 로봇 명령에서 특히 중요하다. 로봇 상태 조회는 일반적으로 안전하게 재시도할 수 있지만, 미션이나 자원 제어 명령을 무조건 반복하면 중복된 물리적 작업이 발생할 수 있다.
+
+멱등성(Idempotency)은 이러한 불확실성을 처리하는 중요한 메커니즘이다. 미션 생성, 충전 요청, 자원 예약 및 기타 재시도 가능한 명령에는 안정적인 요청 식별자(Request Identifier) 또는 멱등성 키(Idempotency Key)를 포함할 수 있다.
+
+타임아웃이나 장애조치 이후 동일한 작업이 다시 도착하면 다른 API 인스턴스가 이전 요청의 수락 여부를 확인할 수 있다. 이를 통해 두 번째 미션을 생성하거나 동일한 물리 명령을 다시 실행하는 대신 기존 처리 결과를 반환할 수 있다.
+
+재시도 정책(Retry Policy)은 모든 요청에 동일하게 적용해서는 안 되며 작업의 의미에 따라 결정해야 한다. 읽기 전용 요청은 일반적으로 자동 재시도가 가능하지만 로봇이나 자원의 상태를 변경하는 명령에는 더 강력한 통제가 필요하다.
+
+이러한 명령에는 고유 명령 ID, 확인 응답 추적(Acknowledgment Tracking), 제한된 재시도 정책 및 상태 조정(Reconciliation)이 필요하다. HTTP 가용성을 높이기 위해 실제 로봇에서 통제되지 않은 중복 동작을 발생시키는 설계는 피해야 한다.
+
+타임아웃(Timeout)은 느리거나 장애가 발생한 의존 서비스가 시스템 자원을 무기한 점유하는 것을 방지한다. 연결, API 요청, 명령 확인, 데이터베이스 및 어댑터에는 각각 서로 다른 타임아웃 값이 필요할 수 있다.
+
+적절한 제한이 없으면 차단된 호출이 계속 누적되어 연결 풀(Connection Pool), 워커 스레드, 소켓 또는 메모리를 고갈시킬 수 있다. 결국 하나의 하위 서비스 장애가 정상적인 다른 플릿 API 인스턴스까지 영향을 주는 연쇄 장애(Cascading Failure)로 확대될 수 있다.
+
+회로 차단기(Circuit Breaker)는 이러한 연쇄 장애를 방지하는 추가적인 보호 경계이다. 데이터베이스, 어댑터 또는 외부 서비스에 대한 요청이 반복적으로 실패하면 일정 시간 동안 추가 호출을 차단한다.
+
+플릿 API는 실패한 의존 서비스에 계속 자원을 소비하는 대신 통제된 오류 또는 성능 저하 응답을 반환할 수 있다. 일정한 복구 시간이 지난 후 제한적인 시험 요청을 보내 의존 서비스가 정상화되었는지 확인한 다음 정상 통신을 재개한다.
+
+벌크헤드 격리(Bulkhead Isolation)는 서로 다른 워크로드가 사용하는 자원을 분리한다. 미션 실행, 로봇 상태 수집, 텔레메트리 처리, 분석, 이벤트 전달 및 관리 작업에 별도의 워커 풀, 큐, 연결 풀 또는 서비스 인스턴스를 사용할 수 있다.
+
+텔레메트리 양이 갑자기 증가하거나 복잡한 보고서 쿼리가 많은 자원을 사용하더라도 다른 자원 풀을 사용하도록 분리하면 중요한 로봇 미션 명령의 처리 능력을 보호할 수 있다.
+
+속도 제한(Rate Limiting)은 과도한 요청으로부터 서비스를 보호한다. 제한은 클라이언트, 테넌트(Tenant), 로봇, 시설, 엔드포인트 또는 작업 유형별로 설정할 수 있다.
+
+텔레메트리 수집은 미션 생성이나 설정 변경보다 훨씬 높은 요청 빈도를 정상적으로 사용할 수 있다. 따라서 트래픽 유형별로 서로 다른 제한을 적용하여 대용량 데이터 흐름을 허용하면서 핵심 서비스의 처리 용량을 보호해야 한다.
+
+백프레셔(Backpressure)는 생산자가 하위 서비스의 처리 속도보다 빠르게 데이터를 생성할 때 필요하다. 시스템은 자원이 고갈될 때까지 무제한 데이터를 받아들이는 대신 제한된 큐, 생산자 속도 제어, 브로커 보존, 흐름 제어, 샘플링 또는 집계를 사용할 수 있다.
+
+중요도가 낮은 텔레메트리는 정책에 따라 감소시킬 수 있지만 미션 상태 전이, 장애, 자원 이벤트 및 기타 중요한 운영 정보에는 더 강력한 전달 보장(Delivery Guarantee)을 적용해야 한다.
+
+WebSocket 연결은 일반적인 HTTP 요청보다 훨씬 오래 유지될 수 있기 때문에 추가적인 로드 밸런싱 고려가 필요하다. 연결이 설정되면 일반적으로 하나의 백엔드 인스턴스에 지속적으로 연결된다.
+
+로드 밸런서는 프로토콜 업그레이드와 장시간 연결을 지원해야 한다. 서버는 선택된 인스턴스가 장애를 일으킬 경우를 대비해 하트비트(Heartbeat), 타임아웃, 연결 해제 감지 및 재연결 메커니즘을 제공해야 한다.
+
+세션 어피니티(Session Affinity), 즉 스티키 세션(Sticky Session)은 로컬 세션 상태를 쉽게 공유할 수 없는 경우 클라이언트를 동일한 백엔드에 유지할 수 있다. 그러나 스티키 세션에 지나치게 의존하면 장애조치 유연성이 감소한다.
+
+보다 견고한 구조에서는 중요한 구독 상태를 외부에 저장하거나 재연결 후 다시 구성할 수 있도록 한다. 재개 토큰(Resume Token), 시퀀스 번호 또는 이벤트 오프셋(Event Offset)을 이용하면 다른 정상 인스턴스로 연결된 후에도 이전 이벤트 스트림을 복구할 수 있다.
+
+이벤트 알림 서비스(Event Notification Service)도 개별 API 인스턴스와 분리되어야 한다. 웹훅(Webhook)이나 WebSocket 전달이 하나의 메모리 큐에만 의존하면 해당 프로세스가 장애를 일으킬 때 이벤트가 손실될 수 있다.
+
+영속적 이벤트 버스(Durable Event Bus), 메시지 브로커 또는 이벤트 저장소를 사용하면 이벤트 생산자와 소비자를 분리할 수 있다. 여러 알림 워커가 저장된 이벤트를 처리하고 실패한 전달을 재시도할 수 있으며 원래 API 인스턴스가 재시작되어도 이벤트 처리를 계속할 수 있다.
+
+메시징 인프라 자체도 단일 장애점이 되어서는 안 된다. 복제된 브로커 노드, 영속 저장소, 파티셔닝(Partitioning) 및 통제된 브로커 장애조치를 통해 개별 메시징 구성요소가 실패하더라도 중요한 플릿 이벤트를 보존할 수 있다.
+
+구현 방식은 메시징 기술에 따라 달라지지만 핵심적인 미션 및 로봇 이벤트가 단일 서버의 휘발성 메모리(Volatile Memory)에만 존재해서는 안 된다는 원칙은 동일하다.
+
+데이터베이스 아키텍처(Database Architecture) 역시 중요하다. 복제된 API 서비스는 일반적으로 로봇 등록 정보, 활성 미션, 자원 예약, 충전 할당, 명령 이력 및 설정과 같은 공유 운영 상태에 의존한다.
+
+데이터베이스 복제와 장애조치는 가용성을 향상시키지만 일관성(Consistency) 규칙을 신중하게 정의해야 한다. 서로 다른 API 인스턴스가 핵심 운영 상태에 대해 서로 모순된 정보를 갖게 되는 것은 일시적으로 새로운 요청을 거부하는 것보다 더 위험할 수 있다.
+
+모든 플릿 데이터가 동일한 일관성 모델(Consistency Model)을 요구하는 것은 아니다. 독점 자원 예약, 미션 소유권 및 명령 중복 제거와 같은 제어 결정에는 강한 일관성(Strong Consistency)이 필요할 수 있다.
+
+반면 과거 분석, 대시보드 요약 또는 비핵심 텔레메트리는 최종 일관성(Eventual Consistency)을 허용할 수 있다. 데이터의 운영 영향에 따라 일관성 수준을 분류하면 불필요한 동기화 비용과 지연을 줄일 수 있다.
+
+하나의 컨트롤러만 특정 로봇, 미션, 충전기 또는 공유 자원을 제어해야 하는 경우 분산 소유권(Distributed Ownership) 메커니즘이 필요하다. 리더 선출(Leader Election), 임대(Lease), 데이터베이스 제약, 분산 잠금 또는 조정 서비스를 사용할 수 있다.
+
+소유권이 변경되면 새로운 인스턴스는 이전 컨트롤러가 정상적으로 종료되었다고 가정하지 않고 기존 상태를 확인한 후 추가 명령을 실행해야 한다.
+
+펜싱(Fencing) 메커니즘은 네트워크 분할(Network Partition) 상황에서 이러한 보호를 더욱 강화한다. 이전 소유자가 조정 시스템과 연결이 끊겼더라도 실제로는 계속 실행 중일 수 있기 때문이다.
+
+단조 증가하는 소유권 토큰(Monotonically Increasing Ownership Token)과 같은 방법을 사용하면 하위 시스템이 오래된 소유자가 전송한 명령을 거부할 수 있다. 이를 통해 두 컨트롤러가 동일한 로봇이나 자원을 동시에 제어할 가능성을 줄일 수 있다.
+
+분할 뇌(Split-Brain) 상태를 방지하는 것은 명령 수락률을 최대화하는 것보다 중요하다. 두 서비스 노드가 동시에 동일한 로봇의 제어권을 가지고 있다고 판단하면 충돌하는 미션이나 중복 자원 예약이 발생할 수 있다.
+
+소유권이 불확실한 경우에는 외형적인 가용성을 유지하기 위해 잘못된 명령을 허용하는 것보다 일시적으로 명령을 거부하거나 지연하는 것이 운영적으로 더 안전하고 정확할 수 있다.
+
+액티브-액티브(Active-Active) 배포에서는 여러 플릿 API 인스턴스가 동시에 트래픽을 처리한다. 상태 비저장 API, 텔레메트리 수집, 이벤트 처리 및 읽기 중심 워크로드에 높은 자원 활용도와 수평 확장성을 제공한다.
+
+그러나 공유 상태 및 독점 작업에는 여전히 조정 메커니즘이 필요하다. 한 인스턴스가 장애를 일으키더라도 별도의 대기 서버를 활성화하는 과정 없이 다른 인스턴스가 계속 요청을 처리할 수 있다는 장점이 있다.
+
+액티브-패시브(Active-Passive) 배포는 하나의 활성 컨트롤러와 하나 이상의 대기 구성요소를 유지한다. 특정 상태 유지 서비스의 소유권 관리를 단순화할 수 있지만 장애조치 시간이 길어지고 대기 자원의 활용률이 낮아질 수 있다.
+
+실제 플릿 플랫폼에서는 두 방식을 조합할 수 있다. API 게이트웨이와 상태 비저장 서비스에는 액티브-액티브를 적용하고, 독점적인 로봇 또는 인프라 제어가 필요한 상태 유지 구성요소에는 액티브-패시브를 적용할 수 있다.
+
+가용성 설계는 단순한 프로세스 수가 아니라 장애 영역(Failure Domain)을 고려해야 한다. 동일한 물리 컴퓨터에서 여러 API 인스턴스를 실행하면 프로세스 장애에는 대응할 수 있지만 호스트, 전원, 저장장치 또는 네트워크 장애에는 대응할 수 없다.
+
+요구되는 신뢰성 수준에 따라 인스턴스를 서로 다른 서버, 가상 머신, 랙, 전원 영역, 네트워크 경로, 가용 영역(Availability Zone) 또는 독립적인 온프레미스 엣지 컴퓨터(On-Premise Edge Computer)에 분산할 수 있다.
+
+네트워크 인프라 역시 단일 장애점을 만들 수 있다. 높은 가용성이 요구되는 산업 환경에서는 이중화 스위치, 네트워크 인터페이스, 게이트웨이 및 통신 경로가 필요할 수 있다.
+
+그러나 플릿 API 서버를 이중화하더라도 개별 로봇의 무선 연결이 끊어지면 해당 로봇과의 통신까지 보장할 수는 없다. 따라서 서비스 가용성, 인프라 연결성 및 개별 로봇 통신 상태를 서로 구분하여 관리해야 한다.
+
+하이브리드 아키텍처(Hybrid Architecture)는 온프레미스 엣지 시스템과 클라우드 인프라 사이에 역할을 분배할 수 있다. 시간 민감도가 높은 미션 오케스트레이션과 로봇 통신은 시설 내부에 유지하고 클라우드는 과거 분석, 원격 모니터링, 보고 및 기업 시스템 통합을 담당할 수 있다.
+
+WAN 연결이 중단되더라도 안전하게 수행할 수 있는 로컬 로봇 운영은 계속 유지되어야 한다. 모든 로봇 기능을 지속적인 클라우드 연결에 의존하도록 설계하는 것은 산업용 플릿의 복원력을 낮출 수 있다.
+
+우아한 성능 저하(Graceful Degradation)는 부분 장애가 발생했을 때 어떤 기능을 계속 사용할 수 있는지를 정의한다. 분석 저장소가 장애를 일으켜도 로봇 미션은 계속 실행할 수 있고 보고서 생성만 지연시킬 수 있다.
+
+ERP 연결이 중단되면 이미 수락된 미션은 계속 실행하고 새로운 기업 요청만 큐에 저장하거나 거부할 수 있다. 알림 서비스가 중단되면 미션 실행을 계속하면서 이벤트를 저장하여 나중에 전달할 수 있다.
+
+복구 요구사항은 운영 목표에 따라 정의해야 한다. 복구 시간 목표(Recovery Time Objective, RTO)는 장애 이후 서비스를 얼마나 빠르게 복구해야 하는지를 나타내고, 복구 시점 목표(Recovery Point Objective, RPO)는 허용 가능한 데이터 손실량을 정의한다.
+
+핵심 미션과 명령 데이터에는 매우 작은 RPO가 필요할 수 있지만 분석 데이터는 영속 이벤트 기록으로 나중에 복원할 수 있다면 일정 수준의 지연된 복제를 허용할 수 있다.
+
+서비스를 재시작했다고 해서 실제 물리적 운영 상태가 자동으로 복구되는 것은 아니다. 복구된 플릿 관리 서버는 영속 데이터와 현재 관측 정보를 사용하여 활성 미션, 로봇 상태, 자원 예약, 충전 세션 및 미처리 명령을 다시 구성해야 한다.
+
+서버가 중단된 동안에도 로봇은 계속 움직였을 수 있으므로 새로운 명령을 실행하기 전에 저장된 상태와 실제 물리적 상태를 비교하고 조정해야 한다.
+
+상태 조정(Reconciliation)은 이러한 복구 과정의 핵심이다. 서버는 이전에 기록된 의도(Intent)와 현재 로봇 및 어댑터 상태를 비교하여 미션이 완료되었는지, 실패했는지, 계속 실행 중인지 또는 상태가 불확실한지를 판단한다.
+
+자동으로 조정할 수 없는 작업은 성공 또는 실패로 임의 판단하지 않고 통제된 복구 또는 운영자 개입(Operator Intervention)이 필요한 상태로 명확하게 표시해야 한다.
+
+롤링 업데이트(Rolling Update)를 사용하면 전체 플릿 API를 중단하지 않고 소프트웨어 유지보수를 수행할 수 있다. 하나의 서비스 인스턴스를 준비되지 않은 상태로 변경하고 새로운 트래픽에서 제외한 뒤 기존 요청을 완료하도록 한다.
+
+이후 업데이트와 검증을 수행하고 다시 활성 풀에 추가한 다음 다음 인스턴스를 순차적으로 처리한다. 연결 드레이닝(Connection Draining)은 장시간 요청과 WebSocket 세션에서 특히 중요하며 불필요한 대규모 재연결을 방지한다.
+
+블루-그린 배포(Blue-Green Deployment)와 카나리 배포(Canary Deployment)는 업데이트 위험을 더욱 줄일 수 있다. 새로운 플릿 API 버전에 제한된 트래픽만 먼저 전달하고 지연시간, 오류, 상태 전이 및 명령 동작을 관찰한 후 점진적으로 확대할 수 있다.
+
+로보틱스 환경에서는 HTTP 성공 코드만으로 배포 성공 여부를 판단해서는 안 된다. API가 정상 응답하더라도 미션, 경로, 충전 또는 자원 제어의 의미가 잘못 변경되었다면 실제 운영에서는 심각한 문제가 발생할 수 있다.
+
+관측 가능성(Observability)은 로드 밸런싱과 고가용성 메커니즘이 실제로 정상 동작하고 있는지를 확인하는 기반이다. 요청률, 지연시간 백분위수, 오류율, 활성 연결 수, 큐 깊이, 재시도 횟수, 회로 차단기 상태 및 백엔드 상태 등을 측정해야 한다.
+
+또한 데이터베이스 복제 상태, 메시지 브로커 지연, 장애조치 이벤트 및 로봇 통신 상태를 함께 모니터링해야 한다. 이러한 지표는 개별 서비스가 아니라 전체 요청 처리 경로를 기준으로 연계하여 분석해야 한다.
+
+분산 추적(Distributed Tracing)을 사용하면 기업 애플리케이션의 미션 요청이 API 게이트웨이, 로드 밸런서, 플릿 관리 서버, 데이터베이스, 이벤트 브로커, 통합 어댑터 및 로봇 인터페이스를 통과하는 전체 흐름을 추적할 수 있다.
+
+상관관계 ID(Correlation ID)를 사용하면 지연이나 장애가 API 처리, 인프라, 어댑터 변환, 네트워크 통신 또는 실제 로봇 실행 중 어느 위치에서 발생했는지를 구분할 수 있다.
+
+중앙 집중식 로깅(Centralized Logging)도 중요하다. 장애조치 전후에 동일한 요청이 서로 다른 인스턴스에서 처리될 수 있으므로 로그에는 요청 식별자, 서비스 인스턴스, 로봇 ID, 미션 ID, 라우팅 결정, 재시도, 소유권 변경 및 장애조치 작업 등을 기록해야 한다.
+
+운영 로그에는 정규화된 오류 범주도 포함할 수 있지만 인증 비밀정보, 액세스 토큰, 개인키 및 기타 민감한 자격 증명은 기록하지 않아야 한다.
+
+경고(Alerting)는 모든 일시적인 오류보다 실제 운영자의 대응이 필요한 상태에 집중해야 한다. 지속적으로 증가하는 지연시간, 반복적인 인스턴스 제거, 큐 증가, 데이터베이스 복제 문제, 브로커 쿼럼(Quorum) 손실 등이 대표적인 예이다.
+
+빈번한 소유권 변경이나 다수 로봇의 동시 연결 해제 역시 시스템 수준의 문제를 나타낼 수 있다. 경고 조건은 임계값뿐 아니라 지속시간과 운영 컨텍스트를 함께 고려하여 불필요한 알람 피로(Alarm Fatigue)를 줄여야 한다.
+
+용량 계획(Capacity Planning)은 고가용성과 분리할 수 없다. 하나의 인스턴스가 장애를 일으켰을 때 남은 서버가 즉시 과부하된다면 해당 클러스터를 진정한 고가용성 구조라고 할 수 없다.
+
+정상 운영 시에도 대표적인 장애 상황과 계획된 유지보수를 처리할 수 있는 충분한 여유 용량을 확보해야 한다. API 요청률, WebSocket 연결, 텔레메트리 양, 이벤트 처리량, 데이터베이스 부하 및 어댑터 통신량을 함께 고려해야 한다.
+
+부하 테스트(Load Testing)는 정상 트래픽과 최대 트래픽뿐 아니라 성능 저하 상태에서도 수행해야 한다. 모든 구성요소가 정상일 때의 최대 처리량만 측정하는 것으로는 고가용성을 검증할 수 없다.
+
+API 인스턴스 제거, 데이터베이스 지연, 브로커 장애, 어댑터 지연, 네트워크 중단 및 다수 클라이언트의 동시 재연결 상황을 시험하여 시스템이 정의된 운영 한계 내에서 계속 동작하는지 확인해야 한다.
+
+장애 주입(Fault Injection)과 카오스 테스트(Chaos Testing)는 일반적인 기능 테스트에서 발견하기 어려운 숨겨진 의존성을 찾는 데 사용할 수 있다. 프로세스 종료, 네트워크 지연, 패킷 손실, 부분적인 네트워크 분할 및 어댑터 장애 등을 통제된 조건에서 발생시킬 수 있다.
+
+실제 물리 로봇이 연결된 경우에는 시뮬레이션, 스테이징 환경 또는 적절한 안전 통제를 사용해야 한다. 복원력을 검증하는 과정 자체가 통제되지 않은 물리적 로봇 동작을 발생시켜서는 안 된다.
+
+보안 인프라(Security Infrastructure)도 가용성 계획에 포함해야 한다. 모든 플릿 API 인스턴스가 하나의 인증, 인가, 인증서 검증 또는 키 관리 서비스에 의존한다면 해당 구성요소의 장애로 전체 API가 접근 불가능해질 수 있다.
+
+따라서 보안 구성요소에도 적절한 중복성을 적용해야 한다. 동시에 의존 서비스가 사용할 수 없다는 이유로 인증이나 인가를 우회해서는 안 되며, 보안 정책에서 요구하는 경우 실패 폐쇄(Fail-Closed) 원칙을 유지해야 한다.
+
+다중 사이트 재해 복구(Multi-Site Disaster Recovery)는 개별 서버나 시설 수준의 장애를 넘어 보호 범위를 확장한다. 핵심 설정, 스키마, 소프트웨어 아티팩트, 선택된 운영 기록 및 복구 절차를 보조 환경에 유지할 수 있다.
+
+복구 설계에서는 서비스 소유권을 어떻게 이전할 것인지와 보조 환경이 시작된 이후 오래된 명령, 자원 예약 또는 세션이 다시 활성화되지 않도록 하는 방법을 명확하게 정의해야 한다.
+
+클라이언트에는 성능 저하 또는 서비스 사용 불가 상태를 명확하게 전달해야 한다. 표준 상태 엔드포인트(Health Endpoint), 정규화된 오류 응답, 재시도 지침 및 서비스 상태 정보를 제공하면 WMS, MES, 운영 애플리케이션, 어댑터 및 분석 시스템이 적절하게 대응할 수 있다.
+
+일시적인 서비스 장애는 잘못된 명령, 인증 실패, 지원되지 않는 로봇 기능 또는 영구적인 설정 오류와 구분되어야 한다. 이를 통해 클라이언트가 오류 유형에 따라 재시도, 사용자 통보 또는 설정 수정과 같은 적절한 복구 동작을 수행할 수 있다.
+
+고가용성은 기능 안전(Functional Safety)의 책임을 분산 API 인프라로 이동시키는 개념이 아니다. 비상 정지, 충돌 회피, 보호 센싱, 속도 제한 및 즉각적인 이동 안전 기능은 로봇 또는 인증된 안전 시스템 내부에 유지되어야 한다.
+
+플릿 API의 이중화는 오케스트레이션 연속성과 운영 신뢰성을 지원하지만 로컬 안전 메커니즘을 대체하지 않는다. 플릿 서버, 네트워크 또는 클라우드 서비스가 사용할 수 없는 상황에서도 로봇의 기본적인 안전 기능은 독립적으로 유지되어야 한다.
+
+복원력 있는 플릿 API 아키텍처(Resilient Fleet API Architecture)는 여러 보완적인 메커니즘을 결합한다. 로드 밸런서는 정상 API 인스턴스 사이에 트래픽을 분산하고, 서비스 디스커버리(Service Discovery)는 사용할 수 있는 구성요소를 식별한다.
+
+상태 비저장 서비스는 수평 확장을 지원하고 영속 데이터베이스는 운영 상태를 보존하며 메시지 브로커는 비동기 워크로드를 분리한다. 필요한 경우 조정 메커니즘(Coordination Mechanism)을 사용하여 독점적인 제어권을 안전하게 유지한다.
+
+상태 점검, 멱등성, 제한된 재시도, 타임아웃, 회로 차단기, 벌크헤드 격리, 속도 제한, 백프레셔, 상태 조정, 관측 가능성 및 통제된 배포 전략은 추가적인 보호 계층을 제공한다.
+
+어떤 하나의 기술만으로 고가용성을 달성할 수 있는 것은 아니다. 신뢰성은 정상 부하, 과부하, 부분 장애, 유지보수 및 복구 상황에서 전체 서비스 아키텍처가 서로 조정되어 동작할 때 확보된다.
+
+최종 목표는 단순히 HTTP 엔드포인트가 계속 응답하도록 만드는 것이 아니다. 고가용성 플릿 API는 구성요소가 장애를 일으키고 복구되는 과정에서도 정확하고 통제된 다중 로봇 오케스트레이션을 유지해야 한다.
+
+가능한 경우 유용한 운영을 계속하고, 필요한 경우 예측 가능한 방식으로 성능을 저하시키며, 영속적인 정보로부터 상태를 복구해야 한다. 동시에 중복 명령, 충돌하는 소유권, 오래된 상태에 따른 판단 및 통제되지 않은 재시도를 방지해야 한다.
+
+로드 밸런싱은 요청과 연결을 확장 가능하게 분산하고, 고가용성은 중복성(Redundancy), 장애 격리(Failure Isolation), 복구(Recovery) 및 운영 연속성(Operational Continuity)을 제공한다.
+
+두 기술을 결합하면 플릿 API는 단일 애플리케이션 엔드포인트를 넘어 성장하는 로봇 플릿, 이기종 로봇 플랫폼, 기업 시스템 통합 및 연속 운영을 안정적으로 지원하는 복원력 있는 핵심 인프라로 발전할 수 있다.
+
+##  
+
+## 09.09 Fleet API Security: Robot Identity / Command Signing
+
+![](images/image9.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+Fleet API security begins with the assumption that every robot, service, operator, adapter, and enterprise application interacting with the fleet is a distinct security principal. A robot should not be trusted merely because it is connected to the facility network. Each participant requires a verifiable identity, defined permissions, and protected credentials so that the Fleet Management Server can determine who is communicating and what operations that entity is allowed to perform.
+
+Robot identity provides a persistent digital representation of a physical robot. The identity should remain stable across network-address changes, software restarts, and normal maintenance while still supporting controlled replacement or revocation of credentials. A fleet-wide robot identifier can be associated with manufacturer, model, serial number, site, fleet membership, software version, capabilities, certificates, and authorization attributes without making network addresses the primary identity mechanism.
+
+Identity and credentials should be treated as separate concepts. The robot identity describes which logical and physical asset is communicating, while credentials provide cryptographic evidence that the communicating device is authorized to claim that identity. Certificates, asymmetric key pairs, hardware-backed keys, or other managed credentials can therefore be rotated without changing the canonical robot identifier used by missions, telemetry, audit records, and fleet applications.
+
+Provisioning establishes the initial trust relationship between a robot and the fleet platform. During manufacturing, commissioning, or site installation, the robot can receive a unique identity and cryptographic material through a controlled process. The Fleet Management Server or identity service records the corresponding trusted information. Secure provisioning should prevent duplicated identities, unauthorized enrollment, and accidental reuse of credentials across multiple physical robots.
+
+Mutual TLS (mTLS) can provide strong machine-to-machine authentication between robots, adapters, gateways, and fleet services. Standard TLS protects confidentiality and server authentication, while mTLS additionally requires the client to present a valid certificate. The Fleet API can therefore verify the identity of a robot or service before accepting communication, and the robot can verify that it is communicating with an authorized fleet endpoint rather than an impersonating server.
+
+Certificate validation should include more than checking whether a certificate is syntactically valid. The system should verify the issuing trust chain, validity period, intended usage, identity mapping, and revocation status according to the deployment policy. Certificate renewal should occur before expiration and preferably without taking the robot out of service. Automated lifecycle management becomes increasingly important as a fleet grows from a few robots to hundreds or thousands of devices.
+
+Private keys require stronger protection than ordinary configuration values. Storing a long-lived private key in an easily readable file can allow an attacker who obtains filesystem access to impersonate the robot. Where hardware permits, cryptographic keys can be protected by a TPM, secure element, hardware security module, or other protected key store. The objective is to perform signing operations without unnecessarily exposing private key material to application software.
+
+Fleet services also require identities. A scheduler, API gateway, telemetry service, adapter, charging service, and analytics application should not share one universal credential. Separate service identities allow authorization policies to restrict each component to the operations required for its role. If one service is compromised, least-privilege boundaries reduce the ability of that credential to issue unrelated commands or access unnecessary fleet information.
+
+Authentication answers who is communicating, whereas authorization determines what that identity may do. A valid robot certificate should not automatically authorize administrative configuration changes, and an analytics service should not automatically receive permission to issue movement commands. Fleet APIs can enforce role-based access control (RBAC), attribute-based access control (ABAC), or combinations of both to associate identities with permitted resources and operations.
+
+Authorization policies can consider robot identity, fleet, site, zone, command type, application role, and operational context. A maintenance application might be permitted to read diagnostics for a defined robot group while being prohibited from creating missions. A scheduler may assign missions but not change security configuration. Fine-grained authorization prevents broad credentials from becoming universal control keys for the entire robot fleet.
+
+Command signing extends protection beyond authenticated transport by providing cryptographic evidence that a specific command was created or approved by an authorized entity and has not been modified. The sender calculates a digital signature or message authentication value over defined command fields. The receiving service verifies the signature before accepting the command, allowing command integrity to be checked independently of the communication channel.
+
+A signed command should include the information necessary to bind the signature to its operational meaning. Typical signed fields can include command ID, command type, robot ID, mission ID, parameters, issuer identity, timestamp, sequence number, expiration time, and security context. Canonical serialization is important because the sender and verifier must calculate the cryptographic operation over exactly the same logical content.
+
+Asymmetric digital signatures are useful when verification should occur without distributing the signing private key. The authorized command issuer signs using its private key, while robots or fleet services verify the result using the corresponding public key. This supports stronger separation between command creation and verification and can provide useful evidence for auditing when keys and identities are managed correctly.
+
+Message authentication codes such as HMAC can also protect command integrity when both communicating parties securely share a secret. HMAC is computationally efficient but requires careful shared-key distribution and rotation. If many robots share the same secret, compromise of one device can weaken the entire trust domain. Unique or narrowly scoped secrets are therefore preferable when symmetric authentication is used.
+
+Command signing does not replace TLS. TLS protects communication in transit, including confidentiality and channel integrity, while command signing protects the command object itself. A signed command can remain verifiable after passing through an API gateway, message broker, adapter, or persistent queue. Using both mechanisms provides layered security: the transport is protected and the operational instruction can be independently authenticated.
+
+Replay protection is essential because a cryptographically valid command may still be dangerous if an attacker captures and retransmits it later. Command IDs, timestamps, expiration times, nonces, and monotonically increasing sequence numbers can help identify previously processed or stale commands. The receiver should maintain sufficient state to reject duplicates and commands that fall outside an acceptable validity window.
+
+Time-based validation requires reliable clock management. If robot and server clocks differ significantly, legitimate commands may be rejected or expired commands may be accepted. Fleet deployments should therefore maintain appropriate time synchronization and define tolerances for clock drift. Where reliable time cannot be guaranteed, sequence numbers or challenge-response mechanisms can provide additional protection against replay attacks.
+
+Command authorization should be evaluated after cryptographic identity has been verified. A command can have a mathematically correct signature while still being unauthorized for the requested robot or operation. The receiver should confirm that the signing identity is permitted to issue that command type, control the target robot, access the relevant site, and operate within any applicable policy constraints before execution proceeds.
+
+High-impact commands can require stronger policies than ordinary operational requests. Emergency administrative overrides, safety-mode changes, credential updates, remote software actions, or commands affecting many robots may require additional authorization conditions. The API security model can apply different assurance levels according to command risk instead of treating a telemetry query and a fleet-wide control operation as equivalent security events.
+
+Adapters are an important trust boundary in heterogeneous fleets. A vendor adapter may receive a strongly authenticated canonical Fleet API command and translate it into a proprietary robot protocol with different security capabilities. The adapter must preserve the authenticated requester, command ID, authorization result, and audit context even when the downstream protocol cannot represent all of those fields directly.
+
+When a legacy robot protocol lacks modern authentication or signing, the adapter cannot create security properties that the native robot does not support. The architecture should explicitly document this limitation and compensate through network segmentation, gateway controls, restricted adapter permissions, physical network protection, and monitoring. Security abstraction should not falsely represent a weak downstream interface as cryptographically equivalent to a strongly authenticated one.
+
+Robot-to-fleet communication should use encrypted channels to protect operational information from interception or modification. Telemetry can reveal robot location, facility layout, mission activity, battery state, faults, and operational schedules. Encryption in transit protects these data flows, while authorization determines which applications may access them. Sensitive stored credentials and security records may additionally require encryption at rest.
+
+Network segmentation provides another defensive layer. Robots, fleet servers, enterprise systems, management interfaces, and external services do not necessarily need unrestricted connectivity to each other. Segmented networks and controlled gateways can limit communication to required protocols and endpoints. If one device becomes compromised, segmentation reduces the attacker\'s ability to move laterally across the complete automation environment.
+
+API gateways can centralize important security controls for northbound Fleet API access. Authentication, token validation, TLS termination, rate limiting, request filtering, logging, and policy enforcement can be applied before traffic reaches internal services. However, internal services should not assume that all traffic behind the gateway is automatically trustworthy. Service-to-service identity and authorization remain important inside the fleet platform.
+
+OAuth 2.0 and JWT-based access tokens can support user and application access to Fleet APIs when appropriate. Tokens can contain or reference scopes defining permitted operations and resources. Short token lifetimes reduce exposure if a token is stolen, while refresh and rotation mechanisms maintain usability. Token validation should verify issuer, audience, expiration, signature, and relevant authorization claims before accepting requests.
+
+Robot identities often require a different lifecycle from human user accounts. Robots may operate continuously for years, undergo maintenance, change network locations, receive software updates, or move between facilities. Identity management must therefore support commissioning, certificate renewal, ownership changes, temporary suspension, decommissioning, and credential revocation throughout the complete robot lifecycle.
+
+Revocation is essential when a robot, service, or credential can no longer be trusted. The fleet platform should be able to prevent a compromised identity from authenticating or issuing commands without requiring every other robot identity to be replaced. Certificate revocation mechanisms, trust-store updates, key disabling, or identity status checks can be used depending on the selected public-key infrastructure and deployment architecture.
+
+Key rotation reduces the risk associated with long-lived cryptographic material. Rotation procedures should replace credentials before expiration or according to security policy while maintaining operational continuity. A transition period may allow both old and new verification keys to be recognized so robots can update without fleet-wide downtime. Rotation events should be auditable and protected against unauthorized key replacement.
+
+Secure boot and software integrity can strengthen robot identity by increasing confidence that valid credentials are being used by approved software. If an attacker can replace robot software while retaining access to legitimate private keys, network authentication alone may not prove that the expected software is operating. Hardware-backed boot verification and signed software updates can therefore complement Fleet API identity mechanisms.
+
+Audit logging provides traceability for security-sensitive operations. Records should identify the requesting principal, target robot, command type, command ID, authorization result, timestamp, API service, adapter, and execution outcome. When command signing is used, relevant signature or key identifiers can also be recorded. Audit records should be protected against unauthorized modification and retained according to operational and security requirements.
+
+Correlation IDs allow security records to be connected with operational records across distributed services. A command may pass through an API gateway, authorization service, Fleet Management Server, message broker, adapter, and robot before producing a completion event. Consistent identifiers make it possible to reconstruct the complete path and determine who requested an action, how it was authorized, and what physical result followed.
+
+Security monitoring should detect abnormal behavior rather than relying only on preventive controls. Repeated authentication failures, unexpected certificate changes, commands from unusual services, excessive rejected signatures, abnormal command frequency, repeated replay attempts, or access to unfamiliar robot groups can indicate configuration problems or malicious activity. These events can feed centralized monitoring and alerting systems.
+
+Rate limiting also contributes to security. An authenticated client should not necessarily be allowed to generate unlimited mission requests, status queries, or command attempts. Limits based on identity, endpoint, robot, fleet, or operation type can reduce denial-of-service risk and contain malfunctioning applications. Security policies should distinguish expected high-frequency telemetry from unusually frequent control commands.
+
+Availability must remain part of security design. Strong authentication is not useful if a single certificate service or authorization component can disable the entire fleet when it fails. Critical identity and policy services may require redundant deployment, cached validation information, and clearly defined failure behavior. However, availability mechanisms must not silently bypass authentication or authorization when security dependencies are unavailable.
+
+Security failures should fail safely according to the type of operation. If command authenticity cannot be verified, the command should not be executed merely to preserve service availability. Read-only or noncritical services may support controlled degraded modes, but physical control operations require explicit trust decisions. The system should distinguish communication failure from authorization denial and security validation failure.
+
+The Fleet API security architecture should ultimately create a chain of trust from enterprise applications and operators through fleet services and adapters to individual robots. Every important command should have an identifiable issuer, authenticated communication path, authorization decision, integrity protection, replay defense, and auditable execution history. Robot identity provides the anchor that connects digital security decisions to physical assets.
+
+When robot identity, credential lifecycle management, encrypted communication, least-privilege authorization, command signing, replay protection, secure adapters, and auditing are designed together, Fleet API security becomes an architectural property rather than an isolated authentication feature. This layered model allows heterogeneous multi-robot systems to exchange commands and operational data while maintaining controlled trust boundaries as fleets expand across robots, vendors, facilities, and enterprise systems.
+
+플릿 API 보안(Fleet API Security)은 플릿과 상호작용하는 모든 로봇, 서비스, 운영자, 어댑터 및 기업 애플리케이션을 서로 구분되는 보안 주체(Security Principal)로 간주하는 것에서 시작한다. 로봇이 시설 네트워크에 연결되어 있다는 이유만으로 신뢰해서는 안 된다. 각 참여자는 검증 가능한 신원(Identity), 정의된 권한(Permission), 보호된 자격 증명(Credential)을 가져야 하며, 이를 통해 플릿 관리 서버(Fleet Management Server)는 누가 통신하고 있고 어떤 작업을 수행할 권한이 있는지를 판단할 수 있다.
+
+로봇 신원(Robot Identity)은 물리적 로봇을 나타내는 지속적인 디지털 표현을 제공한다. 신원은 네트워크 주소 변경, 소프트웨어 재시작 및 일반적인 유지보수 과정에서도 안정적으로 유지되어야 하며, 동시에 자격 증명의 통제된 교체 또는 폐기를 지원해야 한다. 플릿 전체의 로봇 식별자는 제조사, 모델, 일련번호, 사이트, 플릿 소속, 소프트웨어 버전, 기능(Capability), 인증서 및 권한 속성과 연결될 수 있으며, 네트워크 주소를 주요 신원 식별 수단으로 사용해서는 안 된다.
+
+신원(Identity)과 자격 증명(Credential)은 서로 다른 개념으로 취급해야 한다. 로봇 신원은 어떤 논리적·물리적 자산이 통신하고 있는지를 나타내며, 자격 증명은 통신하는 장치가 해당 신원을 주장할 권한이 있음을 암호학적으로 증명한다. 따라서 인증서, 비대칭 키 쌍(Asymmetric Key Pair), 하드웨어 기반 키(Hardware-Backed Key) 등의 자격 증명은 미션, 텔레메트리, 감사 기록 및 플릿 애플리케이션에서 사용하는 표준 로봇 식별자를 변경하지 않고도 교체할 수 있다.
+
+프로비저닝(Provisioning)은 로봇과 플릿 플랫폼 사이의 최초 신뢰 관계를 설정한다. 제조, 시운전(Commissioning) 또는 현장 설치 과정에서 통제된 절차를 통해 로봇에 고유한 신원과 암호화 정보를 제공할 수 있다. 플릿 관리 서버 또는 신원 서비스(Identity Service)는 이에 대응하는 신뢰 정보를 등록한다. 안전한 프로비저닝은 중복 신원, 승인되지 않은 등록 및 여러 물리 로봇에서 동일한 자격 증명을 잘못 재사용하는 문제를 방지해야 한다.
+
+상호 TLS(Mutual TLS, mTLS)는 로봇, 어댑터, 게이트웨이 및 플릿 서비스 사이에서 강력한 기계 간 인증(Machine-to-Machine Authentication)을 제공할 수 있다. 일반 TLS는 기밀성과 서버 인증을 보호하지만, mTLS는 추가로 클라이언트가 유효한 인증서를 제시하도록 요구한다. 따라서 플릿 API는 통신을 허용하기 전에 로봇이나 서비스의 신원을 검증할 수 있으며, 로봇 역시 위장된 서버가 아닌 승인된 플릿 엔드포인트와 통신하고 있음을 확인할 수 있다.
+
+인증서 검증(Certificate Validation)은 인증서가 형식적으로 유효한지만 확인하는 수준을 넘어야 한다. 시스템은 배포 정책에 따라 인증서 발급 신뢰 체인(Trust Chain), 유효 기간, 사용 목적, 신원 매핑 및 폐기 상태(Revocation Status)를 확인해야 한다. 인증서 갱신은 만료 전에 수행되어야 하며 가능한 경우 로봇의 서비스를 중단하지 않고 이루어져야 한다. 플릿이 수 대에서 수백 또는 수천 대로 증가하면 자동화된 인증서 수명주기 관리(Certificate Lifecycle Management)가 더욱 중요해진다.
+
+개인키(Private Key)는 일반적인 설정 값보다 강하게 보호해야 한다. 장기간 사용하는 개인키를 쉽게 읽을 수 있는 파일에 저장하면 파일시스템에 접근한 공격자가 해당 로봇으로 위장할 수 있다. 하드웨어가 지원한다면 TPM, 보안 요소(Secure Element), 하드웨어 보안 모듈(Hardware Security Module, HSM) 또는 기타 보호된 키 저장소를 사용할 수 있다. 핵심 목적은 애플리케이션 소프트웨어에 개인키 자료를 불필요하게 노출하지 않고 서명 작업을 수행하는 것이다.
+
+플릿 서비스(Fleet Service)에도 각각의 신원이 필요하다. 스케줄러, API 게이트웨이, 텔레메트리 서비스, 어댑터, 충전 서비스 및 분석 애플리케이션이 하나의 범용 자격 증명을 공유해서는 안 된다. 독립된 서비스 신원(Service Identity)을 사용하면 권한 정책을 통해 각 구성요소가 자신의 역할에 필요한 작업만 수행하도록 제한할 수 있다. 하나의 서비스가 침해되더라도 최소 권한(Least Privilege) 경계를 통해 해당 자격 증명이 관련 없는 명령을 실행하거나 불필요한 플릿 정보에 접근하는 것을 제한할 수 있다.
+
+인증(Authentication)은 누가 통신하고 있는지를 확인하는 것이고, 인가(Authorization)는 해당 신원이 무엇을 수행할 수 있는지를 결정한다. 유효한 로봇 인증서를 가지고 있다고 해서 관리 설정을 변경할 권한까지 자동으로 부여되어서는 안 되며, 분석 서비스 역시 이동 명령을 실행할 권한을 자동으로 가져서는 안 된다. 플릿 API는 역할 기반 접근 제어(Role-Based Access Control, RBAC), 속성 기반 접근 제어(Attribute-Based Access Control, ABAC) 또는 두 방식을 조합하여 신원과 허용된 자원 및 작업을 연결할 수 있다.
+
+인가 정책(Authorization Policy)은 로봇 신원, 플릿, 사이트, 구역, 명령 유형, 애플리케이션 역할 및 운영 상황을 고려할 수 있다. 유지보수 애플리케이션은 특정 로봇 그룹의 진단 정보를 읽을 수 있지만 미션을 생성할 수 없도록 제한할 수 있다. 스케줄러는 미션을 할당할 수 있지만 보안 설정은 변경하지 못하도록 구성할 수 있다. 세분화된 인가(Fine-Grained Authorization)는 광범위한 자격 증명이 전체 로봇 플릿을 제어하는 범용 제어 키가 되는 것을 방지한다.
+
+명령 서명(Command Signing)은 인증된 전송 채널을 넘어 특정 명령이 승인된 주체에 의해 생성 또는 승인되었으며 전송 과정에서 변경되지 않았다는 암호학적 증거를 제공한다. 송신자는 정의된 명령 필드를 대상으로 디지털 서명(Digital Signature) 또는 메시지 인증 값(Message Authentication Value)을 계산한다. 수신 서비스는 명령을 수락하기 전에 서명을 검증하여 통신 채널과 독립적으로 명령 무결성(Command Integrity)을 확인할 수 있다.
+
+서명된 명령(Signed Command)에는 서명을 실제 운영 의미와 결합하기 위해 필요한 정보가 포함되어야 한다. 일반적으로 명령 ID, 명령 유형, 로봇 ID, 미션 ID, 매개변수, 발행자 신원, 타임스탬프, 시퀀스 번호, 만료 시간 및 보안 컨텍스트(Security Context)를 서명 대상에 포함할 수 있다. 표준화된 직렬화(Canonical Serialization)가 중요한 이유는 송신자와 검증자가 정확히 동일한 논리적 내용을 대상으로 암호 연산을 수행해야 하기 때문이다.
+
+비대칭 디지털 서명(Asymmetric Digital Signature)은 서명용 개인키를 배포하지 않고도 검증을 수행해야 할 때 유용하다. 승인된 명령 발행자는 자신의 개인키로 명령을 서명하고, 로봇이나 플릿 서비스는 대응하는 공개키(Public Key)를 이용해 서명을 검증한다. 키와 신원을 적절하게 관리하면 명령 생성과 검증을 강하게 분리할 수 있으며 감사(Audit)를 위한 유용한 증거도 제공할 수 있다.
+
+HMAC과 같은 메시지 인증 코드(Message Authentication Code)는 양쪽 통신 주체가 공유 비밀키(Shared Secret)를 안전하게 보유하는 경우 명령 무결성을 보호할 수 있다. HMAC은 계산 효율이 높지만 공유 키의 배포와 교체를 신중하게 관리해야 한다. 여러 로봇이 동일한 비밀키를 공유하면 하나의 장치가 침해되었을 때 전체 신뢰 영역이 약화될 수 있으므로 대칭 인증(Symmetric Authentication)을 사용하는 경우에도 고유하거나 좁은 범위의 비밀키를 사용하는 것이 바람직하다.
+
+명령 서명은 TLS를 대체하지 않는다. TLS는 전송 중 통신의 기밀성(Confidentiality)과 채널 무결성(Channel Integrity)을 보호하고, 명령 서명은 명령 객체 자체를 보호한다. 서명된 명령은 API 게이트웨이, 메시지 브로커, 어댑터 또는 영속 큐(Persistent Queue)를 통과한 이후에도 검증할 수 있다. 두 메커니즘을 함께 사용하면 전송 채널과 실제 운영 명령을 각각 보호하는 계층형 보안(Layered Security)을 구성할 수 있다.
+
+재전송 공격 방어(Replay Protection)는 암호학적으로 유효한 명령이라도 공격자가 이를 캡처한 뒤 나중에 다시 전송하면 위험할 수 있기 때문에 필수적이다. 명령 ID, 타임스탬프, 만료 시간, 논스(Nonce), 단조 증가하는 시퀀스 번호 등을 이용하면 이미 처리된 명령이나 오래된 명령을 식별할 수 있다. 수신자는 중복 명령과 허용된 유효 시간 범위를 벗어난 명령을 거부할 수 있도록 충분한 상태를 유지해야 한다.
+
+시간 기반 검증(Time-Based Validation)을 사용하려면 신뢰할 수 있는 시계 관리가 필요하다. 로봇과 서버의 시간이 크게 차이 나면 정상적인 명령이 거부되거나 이미 만료된 명령이 허용될 수 있다. 따라서 플릿 환경에서는 적절한 시간 동기화(Time Synchronization)를 유지하고 허용 가능한 시계 오차 범위를 정의해야 한다. 신뢰할 수 있는 시간이 보장되지 않는 경우에는 시퀀스 번호 또는 질의-응답(Challenge-Response) 방식으로 재전송 공격에 대한 추가 보호를 제공할 수 있다.
+
+명령 인가(Command Authorization)는 암호학적 신원이 검증된 이후에 평가해야 한다. 명령의 서명이 수학적으로 정확하더라도 요청한 로봇이나 작업에 대한 권한이 없을 수 있다. 수신자는 실행 전에 서명 주체가 해당 명령 유형을 발행할 권한이 있는지, 대상 로봇을 제어할 수 있는지, 관련 사이트에 접근할 수 있는지, 그리고 적용되는 정책 제약을 만족하는지를 확인해야 한다.
+
+영향도가 높은 명령(High-Impact Command)은 일반적인 운영 요청보다 강력한 정책을 적용할 수 있다. 긴급 관리 오버라이드, 안전 모드 변경, 자격 증명 갱신, 원격 소프트웨어 작업 또는 다수 로봇에 영향을 주는 명령에는 추가적인 인가 조건을 요구할 수 있다. API 보안 모델은 단순한 텔레메트리 조회와 플릿 전체 제어 작업을 동일한 보안 이벤트로 취급하는 대신 명령 위험도에 따라 서로 다른 보증 수준(Assurance Level)을 적용할 수 있다.
+
+어댑터(Adapter)는 이기종 플릿(Heterogeneous Fleet)에서 중요한 신뢰 경계(Trust Boundary)이다. 벤더 어댑터는 강력하게 인증된 표준 플릿 API 명령을 받아 서로 다른 보안 기능을 가진 독점 로봇 프로토콜로 변환할 수 있다. 하위 프로토콜이 모든 필드를 직접 표현하지 못하더라도 어댑터는 인증된 요청자, 명령 ID, 인가 결과 및 감사 컨텍스트를 유지해야 한다.
+
+레거시 로봇 프로토콜(Legacy Robot Protocol)이 현대적인 인증 또는 서명을 지원하지 않는다면 어댑터가 원래 프로토콜에 존재하지 않는 보안 특성을 만들어낼 수는 없다. 이러한 한계를 아키텍처에 명시하고 네트워크 분할(Network Segmentation), 게이트웨이 제어, 제한된 어댑터 권한, 물리 네트워크 보호 및 모니터링으로 보완해야 한다. 보안 추상화(Security Abstraction)가 취약한 하위 인터페이스를 강력한 암호 인증 인터페이스와 동등한 것으로 잘못 표현해서는 안 된다.
+
+로봇과 플릿 간 통신(Robot-to-Fleet Communication)은 운영 정보가 가로채거나 변경되는 것을 방지하기 위해 암호화된 채널을 사용해야 한다. 텔레메트리에는 로봇 위치, 시설 배치, 미션 활동, 배터리 상태, 장애 및 운영 일정과 같은 정보가 포함될 수 있다. 전송 중 암호화(Encryption in Transit)는 이러한 데이터 흐름을 보호하며, 인가는 어떤 애플리케이션이 해당 정보에 접근할 수 있는지를 결정한다. 민감한 자격 증명과 보안 기록에는 저장 데이터 암호화(Encryption at Rest)를 추가로 적용할 수 있다.
+
+네트워크 분할(Network Segmentation)은 또 하나의 방어 계층을 제공한다. 로봇, 플릿 서버, 기업 시스템, 관리 인터페이스 및 외부 서비스가 서로 제한 없이 통신할 필요는 없다. 분할된 네트워크와 통제된 게이트웨이를 통해 필요한 프로토콜과 엔드포인트에 대해서만 통신을 허용할 수 있다. 하나의 장치가 침해되더라도 네트워크 분할을 통해 공격자가 전체 자동화 환경으로 횡적 이동(Lateral Movement)하는 것을 제한할 수 있다.
+
+API 게이트웨이(API Gateway)는 상위 방향(Northbound)의 플릿 API 접근에 대한 핵심 보안 제어를 중앙화할 수 있다. 인증, 토큰 검증, TLS 종료(TLS Termination), 속도 제한, 요청 필터링, 로깅 및 정책 적용을 내부 서비스에 트래픽이 도달하기 전에 수행할 수 있다. 그러나 내부 서비스 역시 게이트웨이 뒤에서 들어오는 모든 트래픽을 자동으로 신뢰해서는 안 되며, 플릿 플랫폼 내부에서도 서비스 간 신원(Service-to-Service Identity)과 인가가 중요하다.
+
+OAuth 2.0과 JWT 기반 접근 토큰(JWT-Based Access Token)은 적절한 환경에서 사용자 및 애플리케이션의 플릿 API 접근을 지원할 수 있다. 토큰은 허용된 작업과 자원을 정의하는 범위(Scope)를 포함하거나 참조할 수 있다. 짧은 토큰 수명은 토큰 탈취 시 노출 위험을 줄이며, 갱신 및 교체 메커니즘은 사용성을 유지한다. 요청을 수락하기 전에 발급자, 대상(Audience), 만료 시간, 서명 및 관련 인가 클레임(Authorization Claim)을 검증해야 한다.
+
+로봇 신원은 일반적인 사용자 계정과 다른 수명주기(Lifecycle)를 가진다. 로봇은 수년간 연속적으로 운영될 수 있으며 유지보수, 네트워크 위치 변경, 소프트웨어 업데이트 또는 시설 간 이동을 경험할 수 있다. 따라서 신원 관리는 로봇의 전체 수명주기에 걸쳐 시운전, 인증서 갱신, 소유권 변경, 일시 정지, 운영 종료(Decommissioning) 및 자격 증명 폐기(Credential Revocation)를 지원해야 한다.
+
+폐기(Revocation)는 로봇, 서비스 또는 자격 증명을 더 이상 신뢰할 수 없을 때 필수적이다. 플릿 플랫폼은 다른 모든 로봇의 신원을 교체하지 않고도 침해된 신원이 인증하거나 명령을 실행하는 것을 차단할 수 있어야 한다. 선택한 공개키 기반구조(Public Key Infrastructure, PKI)와 배포 아키텍처에 따라 인증서 폐기, 신뢰 저장소(Trust Store) 업데이트, 키 비활성화 또는 신원 상태 검사를 사용할 수 있다.
+
+키 교체(Key Rotation)는 장기간 사용되는 암호화 자료와 관련된 위험을 줄인다. 교체 절차는 인증서 만료 전 또는 보안 정책에 따라 자격 증명을 변경하면서도 운영 연속성을 유지해야 한다. 전환 기간 동안 기존 키와 새로운 검증 키를 동시에 허용하면 전체 플릿을 중단하지 않고 로봇을 순차적으로 업데이트할 수 있다. 모든 키 교체 이벤트는 감사 가능해야 하며 승인되지 않은 키 변경으로부터 보호되어야 한다.
+
+보안 부팅(Secure Boot)과 소프트웨어 무결성(Software Integrity)은 유효한 자격 증명이 승인된 소프트웨어에서 사용되고 있다는 신뢰를 강화할 수 있다. 공격자가 정상적인 개인키에 접근한 상태에서 로봇 소프트웨어를 교체할 수 있다면 네트워크 인증만으로는 기대한 소프트웨어가 동작하고 있음을 보장할 수 없다. 따라서 하드웨어 기반 부팅 검증(Hardware-Backed Boot Verification)과 서명된 소프트웨어 업데이트(Signed Software Update)는 플릿 API 신원 체계를 보완할 수 있다.
+
+감사 로깅(Audit Logging)은 보안에 민감한 작업에 대한 추적 가능성(Traceability)을 제공한다. 기록에는 요청 주체, 대상 로봇, 명령 유형, 명령 ID, 인가 결과, 타임스탬프, API 서비스, 어댑터 및 실행 결과를 포함해야 한다. 명령 서명을 사용하는 경우 관련 서명 또는 키 식별자도 기록할 수 있다. 감사 기록은 승인되지 않은 변경으로부터 보호되어야 하며 운영 및 보안 요구사항에 따라 적절한 기간 동안 보존되어야 한다.
+
+상관관계 ID(Correlation ID)는 분산 서비스 전체의 보안 기록과 운영 기록을 연결한다. 하나의 명령은 완료 이벤트가 발생하기 전에 API 게이트웨이, 인가 서비스, 플릿 관리 서버, 메시지 브로커, 어댑터 및 로봇을 통과할 수 있다. 일관된 식별자를 사용하면 누가 작업을 요청했고, 어떻게 인가되었으며, 최종적으로 어떤 물리적 결과가 발생했는지를 전체 경로에 걸쳐 재구성할 수 있다.
+
+보안 모니터링(Security Monitoring)은 예방적 제어에만 의존하지 않고 비정상적인 행동을 탐지해야 한다. 반복적인 인증 실패, 예상하지 못한 인증서 변경, 비정상적인 서비스에서 발생한 명령, 과도한 서명 검증 실패, 비정상적인 명령 빈도, 반복적인 재전송 공격 또는 익숙하지 않은 로봇 그룹에 대한 접근은 설정 오류나 악의적인 활동을 나타낼 수 있다. 이러한 이벤트는 중앙 모니터링 및 경고 시스템으로 전달할 수 있다.
+
+속도 제한(Rate Limiting) 역시 보안에 기여한다. 인증된 클라이언트라고 해서 무제한으로 미션 요청, 상태 조회 또는 명령을 발생시킬 수 있어서는 안 된다. 신원, 엔드포인트, 로봇, 플릿 또는 작업 유형을 기준으로 제한을 설정하면 서비스 거부(Denial-of-Service) 위험을 줄이고 오작동하는 애플리케이션의 영향을 제한할 수 있다. 보안 정책은 정상적인 고주파 텔레메트리와 비정상적으로 빈번한 제어 명령을 구분해야 한다.
+
+가용성(Availability)도 보안 설계의 일부로 유지되어야 한다. 강력한 인증 체계를 구축하더라도 하나의 인증서 서비스나 인가 구성요소가 장애를 일으켰을 때 전체 플릿이 중단된다면 충분하지 않다. 핵심 신원 및 정책 서비스에는 이중화 배포, 캐시된 검증 정보 및 명확하게 정의된 장애 처리 방식이 필요할 수 있다. 그러나 보안 의존 서비스가 사용할 수 없다고 해서 인증이나 인가를 자동으로 우회해서는 안 된다.
+
+보안 장애(Security Failure)는 작업 유형에 따라 안전하게 실패(Fail Safely)하도록 설계해야 한다. 명령의 진위를 검증할 수 없다면 서비스 가용성을 유지하기 위해 해당 명령을 실행해서는 안 된다. 읽기 전용 또는 비핵심 서비스는 통제된 성능 저하 모드(Degraded Mode)를 지원할 수 있지만, 물리적 제어 작업에는 명확한 신뢰 판단이 필요하다. 시스템은 통신 장애, 인가 거부 및 보안 검증 실패를 서로 구분해야 한다.
+
+플릿 API 보안 아키텍처(Fleet API Security Architecture)는 궁극적으로 기업 애플리케이션과 운영자에서 플릿 서비스와 어댑터를 거쳐 개별 로봇까지 이어지는 신뢰 체인(Chain of Trust)을 구축해야 한다. 모든 중요한 명령에는 식별 가능한 발행자, 인증된 통신 경로, 인가 결정, 무결성 보호, 재전송 방어 및 감사 가능한 실행 이력이 존재해야 한다. 로봇 신원은 디지털 보안 판단을 실제 물리적 자산과 연결하는 기준점 역할을 한다.
+
+로봇 신원, 자격 증명 수명주기 관리(Credential Lifecycle Management), 암호화 통신, 최소 권한 인가, 명령 서명, 재전송 방어, 안전한 어댑터 및 감사 기능을 통합하여 설계하면 플릿 API 보안은 단순한 인증 기능이 아니라 전체 아키텍처의 속성이 된다. 이러한 계층형 모델은 로봇, 벤더, 시설 및 기업 시스템의 규모가 확대되는 상황에서도 이기종 다중 로봇 시스템이 통제된 신뢰 경계를 유지하면서 명령과 운영 데이터를 안전하게 교환할 수 있도록 한다.
+
+##  
+
+## 09.10 Industrial Fleet API Integration: WMS / ERP Case
+
+![](images/image10.png){width="7.268055555555556in" height="7.268055555555556in"}
+
+Industrial fleet API integration connects physical robot operations with the enterprise systems that create, prioritize, monitor, and record business work. In a warehouse or factory, robots rarely operate as isolated automation devices. Their missions originate from inventory movements, production orders, material requests, shipping schedules, or replenishment activities managed by WMS, ERP, MES, and related applications.
+
+A Warehouse Management System (WMS) normally understands inventory, storage locations, picking tasks, receiving, shipping, and warehouse workflows, but it should not need to understand how individual robots navigate. The Fleet Management Server provides this abstraction. The WMS requests a material movement using business-oriented information, while the fleet platform determines which robot should execute the mission and how the physical operation should be performed.
+
+An Enterprise Resource Planning (ERP) system operates at a broader business level and may manage purchasing, production planning, inventory accounting, orders, assets, and financial transactions. ERP information can create demand for physical logistics operations, but directly connecting ERP commands to individual robots creates excessive coupling. An integration layer translates enterprise intent into controlled fleet-level operations instead.
+
+A practical architecture therefore separates business orchestration from robot orchestration. ERP, WMS, and MES determine what business operation is required, while the Fleet Management Server determines how available robots and infrastructure should execute it. Individual robots remain responsible for local navigation, obstacle avoidance, motion control, and safety. This separation prevents enterprise applications from depending on vendor-specific robot behavior.
+
+Consider a warehouse replenishment case. The WMS detects that a picking location has fallen below its required inventory threshold and creates a replenishment request from reserve storage. Instead of selecting a particular AMR, the WMS sends a transport request to the Fleet API containing the pickup location, destination, load information, priority, required capability, and relevant business reference identifiers.
+
+The Fleet Management Server validates the request and converts it into a canonical mission. It evaluates available robots according to location, capability, payload capacity, battery state, current workload, traffic conditions, and operational policy. The scheduler then assigns an appropriate robot or mission sequence without requiring the WMS to understand the internal characteristics of each robot vendor.
+
+This architecture becomes especially important when several robot types share the same facility. An AMR may transport totes, a towing robot may move carts, and a forklift AGV may handle pallets. The enterprise system can describe the required logistics outcome, while the Fleet API uses capability information to determine which robot classes can perform the work. Vendor adapters translate canonical missions into robot-specific commands.
+
+Enterprise requests should include stable business identifiers that remain associated with the corresponding fleet mission. An ERP production order, WMS transport order, warehouse task, container ID, pallet ID, or material request can be linked to a fleet mission ID. These references allow operational events generated by robots to be correlated with the business transaction that originally caused the physical movement.
+
+Mission status should flow back toward enterprise systems throughout execution. A transport request may progress through accepted, scheduled, assigned, executing, completed, failed, or cancelled states. The Fleet API normalizes vendor-specific robot states into business-relevant mission states so that WMS or ERP applications do not need to interpret different status models for every robot platform.
+
+Integration can combine synchronous APIs and asynchronous events. REST or gRPC interfaces are suitable when the WMS submits a mission and requires an immediate acknowledgment. Webhooks, WebSocket streams, or message brokers are more appropriate for later events such as mission start, pickup completion, delivery completion, failure, cancellation, or robot unavailability. This avoids continuous status polling from enterprise applications.
+
+The initial API response should distinguish acceptance from physical completion. A successful HTTP response may indicate that the Fleet Management Server has validated and accepted the mission, not that the robot has already moved the material. Enterprise systems must therefore model long-running robot work as asynchronous operations whose final result is reported through subsequent status queries or events.
+
+Idempotency is essential because enterprise networks and services can experience timeouts or temporary failures. If the WMS submits a transport request but does not receive the response, it may retry. A stable request ID or idempotency key allows the Fleet API to recognize the duplicate request and return the previously created mission rather than generating another robot movement for the same business operation.
+
+The same principle applies when completion events are delivered toward WMS or ERP. Event consumers should tolerate duplicate notifications because distributed systems cannot always guarantee that a message is delivered exactly once. Event IDs, mission IDs, sequence numbers, and processing records allow the receiving application to recognize events it has already processed without duplicating inventory or accounting transactions.
+
+Error handling should translate technical robot problems into meaningful integration states. A vendor-specific navigation error may be useful for maintenance engineers but insufficient for a WMS workflow. The Fleet API can expose a normalized failure category such as destination unavailable, robot unavailable, load handling failure, infrastructure failure, or mission timeout while preserving detailed vendor diagnostics for troubleshooting.
+
+Not every failure should immediately terminate the business operation. If the assigned robot becomes unavailable before pickup, the Fleet Management Server may assign another compatible robot. If a charger, elevator, door, or traffic route is temporarily unavailable, the mission may wait or be replanned. The enterprise system should receive the operational status without having to manage low-level robot recovery logic.
+
+Shared infrastructure must also be integrated into mission execution. Industrial robots may depend on automatic doors, elevators, conveyors, loading stations, chargers, or machine interfaces. The Fleet Management Server can represent these systems as managed resources and coordinate reservations with robot movement. WMS and ERP continue to work with business tasks rather than directly controlling each physical infrastructure component.
+
+MES integration follows similar principles in production environments. A manufacturing operation may request raw materials, work-in-process containers, tools, or finished products to be transported between stations. The MES generates the production-related demand, while the Fleet API converts that demand into transport missions synchronized with production timing, workstation availability, and robot capacity.
+
+Priority mapping is important because enterprise systems and robot fleets may express urgency differently. A WMS may classify an order as urgent, while the fleet scheduler uses numerical priorities or scheduling classes. The integration layer should define deterministic mapping rules so that business priorities influence mission scheduling without allowing every external application to arbitrarily override fleet-wide traffic and safety policies.
+
+Cancellation also requires explicit semantics. An ERP or WMS may cancel a business task after the robot has already started execution. The Fleet API must determine whether the physical mission can still be cancelled safely, whether the robot should complete delivery to a safe location, or whether manual intervention is required. A cancellation request should therefore not be interpreted as proof that physical execution immediately stopped.
+
+Inventory consistency is another critical concern. The WMS may logically reserve or transfer inventory while a robot performs the corresponding physical movement. The integration design should define when inventory states change: at mission acceptance, pickup confirmation, delivery confirmation, or another verified event. Clear transaction boundaries prevent business records from indicating that material moved when the physical transport actually failed.
+
+A common integration pattern uses an API gateway between enterprise applications and fleet services. The gateway can provide authentication, authorization, TLS, rate limiting, request validation, routing, and audit logging. Internal Fleet APIs then handle mission orchestration, robot information, resources, events, and telemetry according to clearly defined service boundaries rather than exposing robot-specific interfaces directly to enterprise applications.
+
+Authentication should identify the enterprise application or service submitting the request. Authorization can then restrict which facility, mission type, robot group, or API operation that application may access. A WMS responsible for one warehouse should not automatically receive control authority over robots at another site. Service identities and least-privilege policies provide controlled machine-to-machine integration.
+
+Industrial environments often contain legacy enterprise systems that cannot directly use modern REST, gRPC, or event-streaming interfaces. Integration middleware can translate database records, file exchanges, SOAP services, message queues, or proprietary interfaces into the canonical Fleet API. This preserves a stable robot integration architecture while allowing older business systems to participate without embedding legacy behavior inside robot software.
+
+Data mapping should be explicit and version controlled. Enterprise location identifiers may differ from robot map identifiers, and business names such as Receiving_Area_01 may need to map to a canonical fleet location or navigation target. Similar mappings may be required for material types, load carriers, priorities, mission types, facilities, and resource identifiers. Configuration should be maintained independently from application code where possible.
+
+API versioning protects enterprise integrations as the robot platform evolves. New robot capabilities, mission parameters, or event fields should not unexpectedly break existing WMS or ERP clients. Versioned schemas, backward-compatible extensions, deprecation policies, and contract testing allow enterprise and robotics teams to upgrade their systems at different times while maintaining predictable interoperability.
+
+Observability should span both business and physical execution layers. A transport request can be traced from an ERP order or WMS task through the API gateway, Fleet Management Server, scheduler, vendor adapter, and robot. Correlation IDs provide a common reference across these components, allowing engineers to determine whether delays originate from enterprise processing, fleet scheduling, network communication, or robot execution.
+
+Operational metrics can combine enterprise and fleet information. Organizations can measure transport request latency, mission queue time, assignment delay, robot travel time, pickup duration, delivery duration, mission success rate, retry rate, and business-order completion time. These metrics reveal whether performance problems originate from robot capacity, warehouse workflow, scheduling rules, infrastructure constraints, or integration services.
+
+High availability is important because enterprise logistics may depend continuously on the Fleet API. Multiple API instances, redundant databases, durable message brokers, health checks, controlled failover, and persistent mission state can prevent individual server failures from stopping warehouse operations. Recovery procedures should reconcile enterprise requests with current physical robot states before commands resume after a significant outage.
+
+Temporary disconnection between enterprise and fleet systems should be handled deliberately. Existing robot missions may continue locally while new WMS requests are buffered, rejected, or queued according to policy. When connectivity returns, the systems should reconcile outstanding requests and completion events using stable identifiers rather than assuming that no physical work occurred during the communication interruption.
+
+Security and safety remain separate but complementary responsibilities. Enterprise applications must be authenticated and authorized before issuing fleet commands, but successful API authorization does not replace local robot safety. Collision avoidance, emergency stopping, protective sensing, and motion limits remain enforced by robot or safety systems even when missions originate from trusted WMS, MES, or ERP applications.
+
+A scalable industrial integration architecture therefore forms a hierarchy of responsibility. ERP and WMS express business demand, integration services convert that demand into standardized requests, the Fleet Management Server orchestrates missions and shared resources, adapters translate canonical operations into vendor protocols, and robots execute physical tasks while maintaining local control and safety.
+
+The reverse information flow is equally important. Robots generate state and execution events, adapters normalize them, the Fleet Management Server converts them into mission-level information, and integration services deliver relevant results to WMS, MES, or ERP. This bidirectional structure creates a closed operational loop connecting digital business transactions with physical material movement.
+
+The primary objective of industrial Fleet API integration is not simply to connect software systems through HTTP. It is to establish a stable contract between enterprise intent and physical automation. When canonical missions, identity, idempotency, asynchronous events, error normalization, resource coordination, security, observability, and recovery are designed together, WMS and ERP systems can use heterogeneous robot fleets as a dependable shared logistics capability.
+
+Such an architecture allows robots and enterprise applications to evolve independently while preserving interoperability. New robot vendors can be introduced through adapters without redesigning WMS workflows, and enterprise systems can change without modifying every robot interface. The Fleet API becomes the controlled integration boundary that transforms individual robots into an extensible industrial fleet service supporting warehouse, manufacturing, and enterprise operations.
+
+산업용 플릿 API 통합(Industrial Fleet API Integration)은 물리적인 로봇 운영과 비즈니스 작업을 생성하고 우선순위를 결정하며 모니터링하고 기록하는 기업 시스템(Enterprise System)을 연결한다. 창고나 공장에서 로봇은 독립된 자동화 장비로만 동작하는 경우가 드물다. 로봇의 미션은 WMS, ERP, MES 및 관련 애플리케이션이 관리하는 재고 이동, 생산 주문, 자재 요청, 출하 일정 또는 보충 작업에서 발생한다.
+
+창고 관리 시스템(Warehouse Management System, WMS)은 일반적으로 재고, 저장 위치, 피킹 작업, 입고, 출고 및 창고 업무 흐름을 이해하지만 개별 로봇이 어떻게 주행하는지까지 이해할 필요는 없다. 플릿 관리 서버(Fleet Management Server)는 이러한 추상화(Abstraction)를 제공한다. WMS는 비즈니스 중심의 정보를 이용해 자재 이동을 요청하고, 플릿 플랫폼은 어떤 로봇이 미션을 수행할지와 실제 작업을 어떻게 실행할지를 결정한다.
+
+전사적 자원 관리(Enterprise Resource Planning, ERP) 시스템은 보다 넓은 비즈니스 수준에서 운영되며 구매, 생산 계획, 재고 회계, 주문, 자산 및 재무 거래 등을 관리할 수 있다. ERP 정보는 물리적 물류 작업의 수요를 생성할 수 있지만 ERP 명령을 개별 로봇에 직접 연결하면 시스템 간 결합도(Coupling)가 지나치게 높아진다. 대신 통합 계층(Integration Layer)이 기업의 의도(Enterprise Intent)를 통제된 플릿 수준 작업으로 변환한다.
+
+따라서 실용적인 아키텍처는 비즈니스 오케스트레이션(Business Orchestration)과 로봇 오케스트레이션(Robot Orchestration)을 분리한다. ERP, WMS 및 MES는 어떤 비즈니스 작업이 필요한지를 결정하고, 플릿 관리 서버는 사용 가능한 로봇과 인프라를 이용해 이를 어떻게 실행할지를 결정한다. 개별 로봇은 로컬 주행, 장애물 회피, 모션 제어 및 안전을 담당하며, 기업 애플리케이션은 벤더별 로봇 동작에 의존하지 않는다.
+
+창고 보충(Warehouse Replenishment) 사례를 생각할 수 있다. WMS가 피킹 위치의 재고가 필요한 임계값 이하로 감소한 것을 감지하면 예비 저장 위치에서 해당 위치로 재고를 이동하는 보충 요청을 생성한다. 특정 AMR을 직접 선택하는 대신 WMS는 픽업 위치, 목적지, 화물 정보, 우선순위, 요구 기능 및 관련 비즈니스 참조 식별자를 포함한 운송 요청을 플릿 API로 전송한다.
+
+플릿 관리 서버는 요청을 검증하고 이를 표준 미션(Canonical Mission)으로 변환한다. 이후 위치, 기능, 적재 용량, 배터리 상태, 현재 작업량, 교통 상황 및 운영 정책을 기준으로 사용 가능한 로봇을 평가한다. 스케줄러(Scheduler)는 WMS가 각 로봇 벤더의 내부 특성을 이해하지 않아도 적절한 로봇 또는 미션 시퀀스(Mission Sequence)를 할당한다.
+
+이러한 아키텍처는 여러 종류의 로봇이 동일한 시설을 공유할 때 특히 중요하다. AMR은 토트(Tote)를 운반하고, 견인 로봇(Towing Robot)은 카트를 이동하며, 지게차 AGV(Forklift AGV)는 팔레트를 취급할 수 있다. 기업 시스템은 필요한 물류 결과를 정의하고 플릿 API는 기능 정보(Capability Information)를 이용해 작업을 수행할 수 있는 로봇 종류를 판단한다. 벤더 어댑터(Vendor Adapter)는 표준 미션을 로봇별 명령으로 변환한다.
+
+기업 시스템의 요청에는 대응하는 플릿 미션과 지속적으로 연결될 수 있는 안정적인 비즈니스 식별자(Business Identifier)가 포함되어야 한다. ERP 생산 주문, WMS 운송 주문, 창고 작업, 컨테이너 ID, 팔레트 ID 또는 자재 요청을 플릿 미션 ID와 연결할 수 있다. 이러한 참조 정보를 사용하면 로봇이 생성한 운영 이벤트를 실제 물리적 이동을 발생시킨 원래의 비즈니스 트랜잭션과 연계할 수 있다.
+
+미션 상태(Mission Status)는 실행 과정 전체에서 기업 시스템으로 다시 전달되어야 한다. 운송 요청은 수락됨(Accepted), 스케줄됨(Scheduled), 할당됨(Assigned), 실행 중(Executing), 완료됨(Completed), 실패함(Failed), 취소됨(Cancelled) 등의 상태를 거칠 수 있다. 플릿 API는 벤더별 로봇 상태를 비즈니스 관점에서 의미 있는 미션 상태로 정규화하여 WMS나 ERP가 각 로봇 플랫폼의 서로 다른 상태 모델을 해석할 필요가 없도록 한다.
+
+통합에서는 동기식 API(Synchronous API)와 비동기 이벤트(Asynchronous Event)를 함께 사용할 수 있다. WMS가 미션을 제출하고 즉시 확인 응답을 받아야 하는 경우 REST 또는 gRPC가 적합하다. 이후 발생하는 미션 시작, 픽업 완료, 배송 완료, 실패, 취소 또는 로봇 사용 불가 등의 이벤트에는 웹훅(Webhook), WebSocket 스트림 또는 메시지 브로커(Message Broker)가 더 적합하다. 이를 통해 기업 애플리케이션의 지속적인 상태 폴링(Status Polling)을 줄일 수 있다.
+
+최초 API 응답은 요청 수락(Acceptance)과 실제 물리적 완료(Physical Completion)를 명확히 구분해야 한다. 성공적인 HTTP 응답은 플릿 관리 서버가 미션을 검증하고 수락했다는 의미일 수 있으며, 로봇이 이미 자재를 이동했다는 의미는 아니다. 따라서 기업 시스템은 장시간 실행되는 로봇 작업을 비동기 작업으로 모델링하고 최종 결과를 후속 상태 조회나 이벤트를 통해 확인해야 한다.
+
+멱등성(Idempotency)은 기업 네트워크와 서비스에서 타임아웃이나 일시적인 장애가 발생할 수 있기 때문에 필수적이다. WMS가 운송 요청을 전송했지만 응답을 받지 못하면 요청을 다시 전송할 수 있다. 안정적인 요청 ID 또는 멱등성 키(Idempotency Key)를 사용하면 플릿 API는 중복 요청을 인식하고 동일한 비즈니스 작업에 대해 또 다른 로봇 이동을 생성하는 대신 기존에 생성된 미션을 반환할 수 있다.
+
+동일한 원칙은 완료 이벤트를 WMS 또는 ERP로 전달할 때도 적용된다. 분산 시스템(Distributed System)에서는 메시지가 항상 정확히 한 번만 전달된다고 보장하기 어렵기 때문에 이벤트 소비자(Event Consumer)는 중복 알림을 처리할 수 있어야 한다. 이벤트 ID, 미션 ID, 시퀀스 번호 및 처리 기록을 이용하면 수신 애플리케이션이 이미 처리한 이벤트를 식별하고 재고 또는 회계 트랜잭션의 중복 처리를 방지할 수 있다.
+
+오류 처리(Error Handling)는 기술적인 로봇 문제를 통합 시스템이 이해할 수 있는 의미 있는 상태로 변환해야 한다. 벤더별 주행 오류는 유지보수 엔지니어에게 유용할 수 있지만 WMS 업무 흐름에는 충분하지 않을 수 있다. 플릿 API는 목적지 사용 불가, 로봇 사용 불가, 화물 처리 실패, 인프라 장애 또는 미션 타임아웃과 같은 정규화된 실패 범주(Normalized Failure Category)를 제공하면서 문제 해결을 위한 상세 벤더 진단 정보도 유지할 수 있다.
+
+모든 장애가 즉시 비즈니스 작업을 종료해야 하는 것은 아니다. 할당된 로봇이 픽업 전에 사용할 수 없게 되면 플릿 관리 서버는 다른 호환 로봇을 다시 할당할 수 있다. 충전기, 엘리베이터, 자동문 또는 이동 경로를 일시적으로 사용할 수 없다면 미션을 대기시키거나 재계획(Replanning)할 수 있다. 기업 시스템은 저수준 로봇 복구 로직을 직접 관리하지 않고 운영 상태만 전달받을 수 있어야 한다.
+
+공유 인프라(Shared Infrastructure) 역시 미션 실행 과정에 통합되어야 한다. 산업용 로봇은 자동문, 엘리베이터, 컨베이어, 적재 스테이션, 충전기 또는 기계 인터페이스에 의존할 수 있다. 플릿 관리 서버는 이러한 시스템을 관리 자원(Managed Resource)으로 표현하고 로봇 이동과 함께 예약을 조정할 수 있다. WMS와 ERP는 각각의 물리 인프라 구성요소를 직접 제어하는 대신 비즈니스 작업을 중심으로 운영할 수 있다.
+
+생산 환경에서의 MES 통합(MES Integration)도 유사한 원칙을 따른다. 제조 작업에서는 원자재, 공정 중 자재(Work-in-Process), 공구 또는 완제품을 작업장 사이에서 이동하도록 요청할 수 있다. MES가 생산 관련 수요를 생성하면 플릿 API는 이를 생산 시점, 작업장 가용성 및 로봇 처리 능력과 동기화된 운송 미션으로 변환한다.
+
+우선순위 매핑(Priority Mapping)은 기업 시스템과 로봇 플릿이 긴급도를 서로 다르게 표현할 수 있기 때문에 중요하다. WMS에서는 주문을 긴급(Urgent)으로 분류할 수 있지만 플릿 스케줄러는 숫자 기반 우선순위 또는 스케줄링 등급을 사용할 수 있다. 통합 계층은 비즈니스 우선순위가 미션 스케줄링에 반영되면서도 외부 애플리케이션이 플릿 전체의 교통 및 안전 정책을 임의로 무시하지 못하도록 결정론적인 매핑 규칙을 정의해야 한다.
+
+취소(Cancellation) 역시 명확한 의미 정의가 필요하다. ERP 또는 WMS가 비즈니스 작업을 취소할 때 로봇은 이미 실행을 시작했을 수 있다. 플릿 API는 물리적 미션을 안전하게 취소할 수 있는지, 로봇이 안전한 위치까지 배송을 완료해야 하는지 또는 운영자 개입이 필요한지를 판단해야 한다. 따라서 취소 요청을 받았다는 사실이 물리적 실행이 즉시 중지되었다는 의미로 해석되어서는 안 된다.
+
+재고 일관성(Inventory Consistency) 역시 중요한 문제이다. WMS는 로봇이 실제 물리적 이동을 수행하는 동안 논리적으로 재고를 예약하거나 이전할 수 있다. 통합 설계에서는 미션 수락, 픽업 확인, 배송 확인 또는 다른 검증 이벤트 중 어느 시점에 재고 상태를 변경할지를 정의해야 한다. 명확한 트랜잭션 경계(Transaction Boundary)를 설정하면 실제 운송이 실패했음에도 비즈니스 기록에서는 자재가 이동한 것으로 처리되는 문제를 방지할 수 있다.
+
+일반적인 통합 패턴에서는 기업 애플리케이션과 플릿 서비스 사이에 API 게이트웨이(API Gateway)를 사용한다. 게이트웨이는 인증, 인가, TLS, 속도 제한, 요청 검증, 라우팅 및 감사 로깅(Audit Logging)을 제공할 수 있다. 내부 플릿 API는 로봇별 인터페이스를 기업 애플리케이션에 직접 노출하지 않고 명확한 서비스 경계를 통해 미션 오케스트레이션, 로봇 정보, 자원, 이벤트 및 텔레메트리를 처리한다.
+
+인증(Authentication)은 요청을 제출한 기업 애플리케이션 또는 서비스를 식별해야 한다. 이후 인가(Authorization)를 통해 해당 애플리케이션이 접근할 수 있는 시설, 미션 유형, 로봇 그룹 또는 API 작업을 제한할 수 있다. 하나의 창고를 담당하는 WMS가 다른 사이트의 로봇까지 자동으로 제어할 권한을 가져서는 안 된다. 서비스 신원(Service Identity)과 최소 권한(Least Privilege) 정책을 통해 통제된 기계 간 통합(Machine-to-Machine Integration)을 구현할 수 있다.
+
+산업 환경에는 최신 REST, gRPC 또는 이벤트 스트리밍 인터페이스를 직접 사용할 수 없는 레거시 기업 시스템(Legacy Enterprise System)이 존재하는 경우가 많다. 통합 미들웨어(Integration Middleware)는 데이터베이스 레코드, 파일 교환, SOAP 서비스, 메시지 큐 또는 독점 인터페이스를 표준 플릿 API로 변환할 수 있다. 이를 통해 로봇 소프트웨어 내부에 레거시 동작을 포함시키지 않고도 기존 비즈니스 시스템이 안정적인 로봇 통합 아키텍처에 참여할 수 있다.
+
+데이터 매핑(Data Mapping)은 명시적으로 정의되고 버전 관리되어야 한다. 기업 시스템의 위치 식별자는 로봇 맵 식별자와 다를 수 있으며, Receiving_Area_01과 같은 비즈니스 위치 이름을 표준 플릿 위치 또는 주행 목표점으로 매핑해야 할 수 있다. 자재 유형, 운반 장치, 우선순위, 미션 유형, 시설 및 자원 식별자에도 유사한 매핑이 필요하며, 가능한 경우 이러한 설정은 애플리케이션 코드와 분리하여 관리해야 한다.
+
+API 버전 관리(API Versioning)는 로봇 플랫폼이 발전하더라도 기업 시스템과의 통합을 보호한다. 새로운 로봇 기능, 미션 매개변수 또는 이벤트 필드가 추가되더라도 기존 WMS나 ERP 클라이언트가 갑자기 동작하지 않게 되어서는 안 된다. 버전이 지정된 스키마, 하위 호환 확장(Backward-Compatible Extension), 사용 중단 정책(Deprecation Policy) 및 계약 테스트(Contract Testing)를 통해 기업 시스템과 로보틱스 시스템을 서로 다른 시점에 업그레이드하면서도 예측 가능한 상호운용성을 유지할 수 있다.
+
+관측 가능성(Observability)은 비즈니스 계층과 물리 실행 계층 모두를 포함해야 한다. 하나의 운송 요청은 ERP 주문 또는 WMS 작업에서 시작하여 API 게이트웨이, 플릿 관리 서버, 스케줄러, 벤더 어댑터 및 로봇까지 추적할 수 있어야 한다. 상관관계 ID(Correlation ID)는 이들 구성요소 사이에 공통 참조를 제공하여 지연이 기업 처리, 플릿 스케줄링, 네트워크 통신 또는 로봇 실행 중 어디에서 발생했는지를 확인할 수 있도록 한다.
+
+운영 지표(Operational Metric)는 기업 정보와 플릿 정보를 결합할 수 있다. 운송 요청 지연시간, 미션 큐 대기시간, 할당 지연, 로봇 이동시간, 픽업 시간, 배송 시간, 미션 성공률, 재시도율 및 비즈니스 주문 완료시간 등을 측정할 수 있다. 이러한 지표를 분석하면 성능 문제가 로봇 용량, 창고 업무 흐름, 스케줄링 규칙, 인프라 제약 또는 통합 서비스 중 어디에서 발생하는지를 파악할 수 있다.
+
+기업 물류가 플릿 API에 지속적으로 의존할 수 있기 때문에 고가용성(High Availability)이 중요하다. 여러 API 인스턴스, 이중화된 데이터베이스, 영속 메시지 브로커(Durable Message Broker), 상태 점검, 통제된 장애조치(Failover) 및 영속적인 미션 상태를 이용하면 개별 서버 장애로 전체 창고 운영이 중단되는 것을 방지할 수 있다. 중요한 장애 이후에는 명령을 다시 시작하기 전에 기업 요청과 현재 로봇의 물리적 상태를 조정해야 한다.
+
+기업 시스템과 플릿 시스템 사이의 일시적인 연결 중단도 의도적으로 처리해야 한다. 기존 로봇 미션은 로컬에서 계속 실행될 수 있으며, 새로운 WMS 요청은 정책에 따라 버퍼링, 거부 또는 큐잉(Queuing)할 수 있다. 연결이 복구되면 통신 중단 동안 물리적 작업이 발생하지 않았다고 가정하지 않고 안정적인 식별자를 이용하여 미처리 요청과 완료 이벤트를 서로 조정해야 한다.
+
+보안(Security)과 안전(Safety)은 서로 구분되지만 상호 보완적인 책임이다. 기업 애플리케이션은 플릿 명령을 실행하기 전에 인증되고 인가되어야 하지만 성공적인 API 인가가 로봇의 로컬 안전을 대체하지는 않는다. 충돌 회피, 비상 정지, 보호 센싱 및 이동 제한은 신뢰할 수 있는 WMS, MES 또는 ERP에서 미션이 생성되더라도 로봇 또는 안전 시스템에서 계속 적용되어야 한다.
+
+확장 가능한 산업용 통합 아키텍처(Scalable Industrial Integration Architecture)는 명확한 책임 계층을 형성한다. ERP와 WMS는 비즈니스 수요를 표현하고, 통합 서비스는 이를 표준화된 요청으로 변환하며, 플릿 관리 서버는 미션과 공유 자원을 오케스트레이션한다. 어댑터는 표준 작업을 벤더 프로토콜로 변환하고, 로봇은 로컬 제어와 안전을 유지하면서 실제 물리 작업을 수행한다.
+
+반대 방향의 정보 흐름도 동일하게 중요하다. 로봇은 상태 및 실행 이벤트를 생성하고, 어댑터는 이를 정규화하며, 플릿 관리 서버는 이를 미션 수준 정보로 변환한다. 이후 통합 서비스는 관련 결과를 WMS, MES 또는 ERP로 전달한다. 이러한 양방향 구조(Bidirectional Structure)는 디지털 비즈니스 트랜잭션과 실제 물리적 자재 이동을 연결하는 폐루프 운영(Closed Operational Loop)을 형성한다.
+
+산업용 플릿 API 통합의 주요 목적은 단순히 HTTP를 통해 소프트웨어 시스템을 연결하는 것이 아니다. 핵심은 기업의 의도(Enterprise Intent)와 물리적 자동화(Physical Automation) 사이에 안정적인 계약(Stable Contract)을 구축하는 것이다. 표준 미션, 신원, 멱등성, 비동기 이벤트, 오류 정규화, 자원 조정, 보안, 관측 가능성 및 복구를 함께 설계하면 WMS와 ERP는 이기종 로봇 플릿을 신뢰할 수 있는 공용 물류 기능으로 활용할 수 있다.
+
+이러한 아키텍처에서는 상호운용성(Interoperability)을 유지하면서 로봇과 기업 애플리케이션이 독립적으로 발전할 수 있다. 새로운 로봇 벤더는 WMS 업무 흐름을 재설계하지 않고 어댑터를 통해 추가할 수 있으며, 기업 시스템 역시 모든 로봇 인터페이스를 수정하지 않고 변경할 수 있다. 플릿 API는 개별 로봇을 창고, 제조 및 기업 운영을 지원하는 확장 가능한 산업용 플릿 서비스(Industrial Fleet Service)로 전환하는 통제된 통합 경계 역할을 한다.
